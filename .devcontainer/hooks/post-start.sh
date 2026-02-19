@@ -13,8 +13,10 @@ if [ -f ".git" ]; then
   host_git_common="${host_gitdir%/worktrees/*}"
 
   # Create symlink: /Users/you/myapp/.git → /workspaces/myapp/.git
-  mkdir -p "$(dirname "$host_git_common")"
-  ln -sfn "/workspaces/${MAIN_REPO_NAME}/.git" "$host_git_common"
+  # Needs sudo because the host path (e.g. /Users/...) requires creating
+  # directories at the filesystem root, which the remoteUser cannot do.
+  sudo mkdir -p "$(dirname "$host_git_common")"
+  sudo ln -sfn "/workspaces/${MAIN_REPO_NAME}/.git" "$host_git_common"
 
   # Verify git works
   if git status --short > /dev/null 2>&1; then
