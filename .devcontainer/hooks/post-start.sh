@@ -3,11 +3,13 @@ set -euo pipefail
 
 echo "=== devcontainer-wt: starting worktree '${WORKTREE_NAME}' ==="
 
-# --- Git worktree symlink fix ---
+# =============================================================================
+# DO NOT EDIT — Git worktree symlink fix
 # If this is a worktree (not the main repo), the .git file contains a host path
 # (e.g., gitdir: /Users/you/myapp/.git/worktrees/feature-x) that doesn't resolve
 # inside the container. Instead of rewriting the file, we create a symlink so the
 # host path resolves transparently. The .git file is NEVER modified.
+# =============================================================================
 if [ -f ".git" ]; then
   host_gitdir=$(sed 's/gitdir: //' .git)
   host_git_common="${host_gitdir%/worktrees/*}"
@@ -28,19 +30,32 @@ if [ -f ".git" ]; then
   fi
 fi
 
+# =============================================================================
+# CUSTOMIZE — Project setup below
+# Everything below this line is yours to edit. Add dependency installation,
+# database initialization, migrations, dev server startup, etc.
+# All commands should be idempotent (safe to run on every container start).
+# =============================================================================
+
 # --- Install dependencies ---
-cd /workspaces/${WORKTREE_NAME}
-npm install
+# Examples:
+#   npm install
+#   pnpm install
+#   bundle install
+#   pip install -r requirements.txt
 
 # --- Database initialization ---
 # Create a per-worktree database if it doesn't exist.
-PGPASSWORD=dev psql -h "postgres-${PROJECT_NAME}" -U dev -tc \
-  "SELECT 1 FROM pg_database WHERE datname = '${PROJECT_NAME}_${WORKTREE_NAME}'" | \
-  grep -q 1 || \
-  PGPASSWORD=dev createdb -h "postgres-${PROJECT_NAME}" -U dev "${PROJECT_NAME}_${WORKTREE_NAME}" 2>/dev/null || \
-  echo "[devcontainer-wt] Note: Could not create DB (Postgres may not be running yet if this is a feature worktree starting before main)."
+# Examples:
+#   PGPASSWORD=dev psql -h "postgres-${PROJECT_NAME}" -U dev -tc \
+#     "SELECT 1 FROM pg_database WHERE datname = '${PROJECT_NAME}_${WORKTREE_NAME}'" | \
+#     grep -q 1 || \
+#     PGPASSWORD=dev createdb -h "postgres-${PROJECT_NAME}" -U dev "${PROJECT_NAME}_${WORKTREE_NAME}"
 
-# --- Dev server ---
-nohup node src/server.js > /tmp/dev-server.log 2>&1 &
+# --- Migrations ---
+# Examples:
+#   npx prisma migrate deploy
+#   rails db:migrate
+#   alembic upgrade head
 
 echo "=== devcontainer-wt: worktree '${WORKTREE_NAME}' ready ==="

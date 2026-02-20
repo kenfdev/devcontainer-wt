@@ -1,4 +1,19 @@
+# =============================================================================
+# Shared infrastructure services (started only in the main worktree).
+#
+# DO NOT EDIT the traefik service or the networks section — they are part of
+# the devcontainer-wt template engine.
+#
+# CUSTOMIZE: Add your own infrastructure services (Postgres, Redis, etc.)
+# under the "Add infrastructure services below" section.
+# Every service MUST have `profiles: [infra]` to ensure it only starts
+# from the main worktree.
+# =============================================================================
+
 services:
+  # ---------------------------------------------------------------------------
+  # DO NOT EDIT — devcontainer-wt core infrastructure
+  # ---------------------------------------------------------------------------
   traefik:
     profiles: [infra]
     image: traefik:v3
@@ -23,25 +38,44 @@ services:
       - devnet
     restart: unless-stopped
 
-  postgres:
-    profiles: [infra]
-    image: postgres:16
-    container_name: "postgres-${PROJECT_NAME}"
-    environment:
-      POSTGRES_PASSWORD: dev
-      POSTGRES_USER: dev
-    ports:
-      - "${POSTGRES_HOST_PORT:-15432}:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    networks:
-      - devnet
-    restart: unless-stopped
+  # ---------------------------------------------------------------------------
+  # CUSTOMIZE — Add infrastructure services below.
+  # Remember: every service needs `profiles: [infra]`.
+  # ---------------------------------------------------------------------------
 
-volumes:
-  pgdata:
-    name: "${PROJECT_NAME}-pgdata"
+  # postgres:
+  #   profiles: [infra]
+  #   image: postgres:16
+  #   container_name: "postgres-${PROJECT_NAME}"
+  #   environment:
+  #     POSTGRES_PASSWORD: dev
+  #     POSTGRES_USER: dev
+  #   ports:
+  #     - "${POSTGRES_HOST_PORT:-15432}:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   networks:
+  #     - devnet
+  #   restart: unless-stopped
 
+  # redis:
+  #   profiles: [infra]
+  #   image: redis:7-alpine
+  #   container_name: "redis-${PROJECT_NAME}"
+  #   networks:
+  #     - devnet
+  #   restart: unless-stopped
+
+# ---------------------------------------------------------------------------
+# CUSTOMIZE — Uncomment and add volumes for infrastructure services.
+# ---------------------------------------------------------------------------
+# volumes:
+#   pgdata:
+#     name: "${PROJECT_NAME}-pgdata"
+
+# ---------------------------------------------------------------------------
+# DO NOT EDIT — devcontainer-wt networking
+# ---------------------------------------------------------------------------
 networks:
   devnet:
     name: ${NETWORK_NAME}

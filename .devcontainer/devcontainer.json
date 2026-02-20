@@ -1,4 +1,11 @@
 {
+  // =========================================================================
+  // DO NOT EDIT the fields: name, dockerComposeFile, service, workspaceFolder,
+  // initializeCommand, postStartCommand, remoteEnv.
+  // They are part of the devcontainer-wt template engine.
+  //
+  // CUSTOMIZE: features, customizations (extensions, settings).
+  // =========================================================================
   "name": "${localWorkspaceFolderBasename}",
   "dockerComposeFile": [
     "docker-compose.infra.yml",
@@ -12,11 +19,15 @@
     "WORKTREE_NAME": "${localWorkspaceFolderBasename}",
     "GITHUB_TOKEN": "${localEnv:GITHUB_TOKEN}"
   },
-  "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "20"
-    }
-  },
+  // CUSTOMIZE: Add devcontainer features for your project's language/tools.
+  // See: https://containers.dev/features
+  // Examples:
+  //   "ghcr.io/devcontainers/features/node:1": { "version": "20" }
+  //   "ghcr.io/devcontainers/features/python:1": { "version": "3.12" }
+  //   "ghcr.io/devcontainers/features/go:1": { "version": "1.22" }
+  "features": {},
+  // CUSTOMIZE: Add VS Code extensions for your project.
+  // Each worktree container installs its own copy.
   "customizations": {
     "vscode": {
       "extensions": []
