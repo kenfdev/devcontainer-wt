@@ -1,8 +1,11 @@
 # =============================================================================
 # Shared infrastructure services (started only in the main worktree).
 #
-# DO NOT EDIT the traefik service or the networks section — they are part of
-# the devcontainer-wt template engine.
+# DO NOT EDIT the networks section — it is part of the devcontainer-wt
+# template engine.
+#
+# The traefik service provides hostname-based routing for worktree containers.
+# Remove or edit it if your project doesn't need routing.
 #
 # CUSTOMIZE: Add your own infrastructure services (Postgres, Redis, etc.)
 # under the "Add infrastructure services below" section.
@@ -12,7 +15,9 @@
 
 services:
   # ---------------------------------------------------------------------------
-  # DO NOT EDIT — devcontainer-wt core infrastructure
+  # Traefik reverse proxy — provides hostname-based routing
+  # (e.g. app.myproject.localhost) for worktree containers.
+  # Remove or edit this service if you don't need routing.
   # ---------------------------------------------------------------------------
   traefik:
     profiles: [infra]
