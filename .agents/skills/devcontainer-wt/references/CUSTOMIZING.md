@@ -178,6 +178,81 @@ code .
 
 ## Common Scenarios
 
+### CLI tool / library (no Traefik, no shared infra)
+
+For projects with no HTTP traffic (CLI tools, libraries, compilers, etc.), the core value of devcontainer-wt is the **git worktree fix** and **per-worktree isolation** — Traefik and shared infrastructure are not needed.
+
+**What still works without infra:**
+- Git worktree fix (the primary reason to use devcontainer-wt)
+- Per-worktree containers with full isolation
+- Per-worktree env vars (via `.env.app.template`)
+- Orphan container detection
+- Parallel AI agents (one per worktree)
+
+**`docker-compose.infra.yml`** — comment out or remove the Traefik service. Keep only the network definition (required by Docker Compose):
+
+```yaml
+services:
+  # No infrastructure services needed for this project.
+
+  # ---------------------------------------------------------------------------
+  # CUSTOMIZE — Add infrastructure services below if needed later.
+  # Remember: every service needs `profiles: [infra]`.
+  # ---------------------------------------------------------------------------
+
+networks:
+  devnet:
+    name: ${NETWORK_NAME}
+```
+
+**`docker-compose.yml`** — remove the Traefik labels and `extra_hosts`. Keep the `devcontainer-wt.*` metadata labels (used by orphan detection):
+
+```yaml
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    tty: true
+    container_name: "app-${PROJECT_NAME}-${WORKTREE_NAME}"
+    volumes:
+      - ${LOCAL_WORKSPACE_FOLDER}:/workspaces/${WORKTREE_NAME}:cached
+      - ${GIT_COMMON_DIR}:/workspaces/${MAIN_REPO_NAME}/.git:rw
+    labels:
+      # No Traefik labels — this project has no HTTP traffic.
+      # Orphan detection labels (keep these):
+      - "devcontainer-wt=true"
+      - "devcontainer-wt.project=${PROJECT_NAME}"
+      - "devcontainer-wt.worktree=${WORKTREE_NAME}"
+      - "devcontainer-wt.worktree-dir=${LOCAL_WORKSPACE_FOLDER}"
+    env_file:
+      - .env.app
+    environment:
+      - WORKTREE_NAME=${WORKTREE_NAME}
+      - PROJECT_NAME=${PROJECT_NAME}
+      - MAIN_REPO_NAME=${MAIN_REPO_NAME}
+    networks:
+      - devnet
+
+networks:
+  devnet:
+    external: true
+    name: ${NETWORK_NAME}
+```
+
+**No other changes needed.** `init.sh` and `post-start.sh` work as-is. The Docker network is still created (required by Compose) but carries no overhead. The `COMPOSE_PROFILES=infra` is set for the main worktree but has no effect since there are no infra services.
+
+**Quick summary:**
+
+```
+Dockerfile:                     Add your language/tools
+devcontainer.json features:     Add runtime (Go, Rust, Python, etc.)
+docker-compose.infra.yml:       Remove Traefik, leave network only
+docker-compose.yml:             Remove Traefik labels and extra_hosts
+.env.app.template:              Minimal or empty
+post-start.sh:                  Dependency install, build steps
+```
+
 ### Python + PostgreSQL project
 
 ```
@@ -199,7 +274,7 @@ docker-compose.infra.yml:   Uncomment redis
 post-start.sh:              go mod download
 ```
 
-### Multi-service project (frontend + API)
+### Multi-service project (frontend + API, separate containers)
 
 Define multiple services in `docker-compose.yml` with separate Traefik routes:
 
@@ -229,3 +304,70 @@ services:
     networks:
       - devnet
 ```
+
+### Monorepo / Turborepo (recommended: single container, multiple routes)
+
+For monorepos with multiple apps (e.g., `apps/ui` on port 3000, `apps/api` on port 4000), use a **single container** with multiple Traefik router labels. Let your monorepo tool (Turborepo, Nx, etc.) orchestrate the processes inside the container.
+
+This is the recommended approach because:
+- Your monorepo tool already handles process orchestration — no need to duplicate it with Docker Compose services.
+- One container means one terminal/editor context with access to the entire monorepo.
+- Fewer containers per worktree = less resource overhead (important when running many worktrees in parallel).
+- Shared packages (e.g., `packages/shared`) are naturally accessible to all apps.
+
+**`docker-compose.yml`** — add multiple Traefik routers on the same `app` service, each pointing to a different port:
+
+```yaml
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    container_name: "app-${PROJECT_NAME}-${WORKTREE_NAME}"
+    volumes:
+      - ${LOCAL_WORKSPACE_FOLDER}:/workspaces/${WORKTREE_NAME}:cached
+      - ${GIT_COMMON_DIR}:/workspaces/${MAIN_REPO_NAME}/.git:rw
+    labels:
+      - "traefik.enable=true"
+      # UI app (port 3000)
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.rule=Host(`${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.entrypoints=web"
+      - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-ui.loadbalancer.server.port=3000"
+      # API app (port 4000)
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.rule=Host(`api.${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.entrypoints=web"
+      - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-api.loadbalancer.server.port=4000"
+      # Orphan detection labels
+      - "devcontainer-wt=true"
+      - "devcontainer-wt.project=${PROJECT_NAME}"
+      - "devcontainer-wt.worktree=${WORKTREE_NAME}"
+      - "devcontainer-wt.worktree-dir=${LOCAL_WORKSPACE_FOLDER}"
+    env_file:
+      - .env.app
+    environment:
+      - WORKTREE_NAME=${WORKTREE_NAME}
+      - PROJECT_NAME=${PROJECT_NAME}
+      - MAIN_REPO_NAME=${MAIN_REPO_NAME}
+    extra_hosts:
+      - "${WORKTREE_NAME}.${PROJECT_NAME}.localhost:host-gateway"
+      - "api.${WORKTREE_NAME}.${PROJECT_NAME}.localhost:host-gateway"
+    networks:
+      - devnet
+```
+
+**`post-start.sh`** — start the monorepo dev server after the git fix:
+
+```bash
+# --- Dev server (Turborepo) ---
+# turbo dev starts all apps (ui on :3000, api on :4000)
+nohup turbo dev > /tmp/turbo-dev.log 2>&1 &
+```
+
+**Browser access per worktree:**
+
+| URL | Target |
+|---|---|
+| `feature-x.myapp.localhost` | UI app (port 3000) |
+| `api.feature-x.myapp.localhost` | API app (port 4000) |
+
+Add more routers for additional apps (e.g., `docs.feature-x.myapp.localhost` → port 3001).

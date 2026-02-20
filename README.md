@@ -2,8 +2,6 @@
 
 Seamless devcontainer + git worktree workflows. Run multiple feature branches simultaneously, each in its own isolated devcontainer with its own database, routed via Traefik subdomains.
 
-> **Using this as a template?** See **[CUSTOMIZING.md](.agents/skills/devcontainer-wt/references/CUSTOMIZING.md)** for a step-by-step guide on which files to edit and which to leave alone.
-
 ## What You Get
 
 - **Git works inside containers** -- worktree `.git` file resolution is fixed automatically via symlink (no file mutation).
@@ -11,6 +9,22 @@ Seamless devcontainer + git worktree workflows. Run multiple feature branches si
 - **Per-worktree database** -- each worktree gets its own database, created automatically on startup.
 - **Per-worktree env vars** -- `.env.app.template` is expanded per worktree with `${WORKTREE_NAME}`, `${PROJECT_NAME}`, etc.
 - **Orphan detection** -- stale containers from deleted worktrees are detected on every startup.
+
+## Install
+
+Run this from your project's root directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kenfdev/devcontainer-wt/main/install.sh | bash
+```
+
+The installer will:
+- Download the template files from GitHub
+- Set up `.devcontainer/` with all required configuration
+- Prompt to backup if `.devcontainer/` already exists
+- Optionally install AI skill files for agent-assisted customization
+
+After installing, see **[CUSTOMIZING.md](.agents/skills/devcontainer-wt/references/CUSTOMIZING.md)** for which files to edit and which to leave alone.
 
 ## URL Pattern
 
