@@ -31,7 +31,7 @@ services:
     # -------------------------------------------------------------------------
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}.rule=Host(`${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}.rule=Host(`${BRANCH_NAME}.${PROJECT_NAME}.localhost`)"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}.entrypoints=web"
       # CUSTOMIZE: Change 3000 to your app's port
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}.loadbalancer.server.port=3000"
@@ -39,6 +39,7 @@ services:
       - "devcontainer-wt.project=${PROJECT_NAME}"
       - "devcontainer-wt.worktree=${WORKTREE_NAME}"
       - "devcontainer-wt.worktree-dir=${LOCAL_WORKSPACE_FOLDER}"
+      - "devcontainer-wt.branch=${BRANCH_NAME}"
 
     # -------------------------------------------------------------------------
     # DO NOT EDIT — devcontainer-wt core environment
@@ -47,10 +48,11 @@ services:
       - .env.app
     environment:
       - WORKTREE_NAME=${WORKTREE_NAME}
+      - BRANCH_NAME=${BRANCH_NAME}
       - PROJECT_NAME=${PROJECT_NAME}
       - MAIN_REPO_NAME=${MAIN_REPO_NAME}
     extra_hosts:
-      - "${WORKTREE_NAME}.${PROJECT_NAME}.localhost:host-gateway"
+      - "${BRANCH_NAME}.${PROJECT_NAME}.localhost:host-gateway"
     networks:
       - devnet
 

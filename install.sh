@@ -110,12 +110,18 @@ cp "$TEMPLATE_DIR/.devcontainer/docker-compose.yml"       .devcontainer/
 cp "$TEMPLATE_DIR/.devcontainer/docker-compose.infra.yml" .devcontainer/
 cp "$TEMPLATE_DIR/.devcontainer/Dockerfile"               .devcontainer/
 cp "$TEMPLATE_DIR/.devcontainer/hooks/post-start.sh"      .devcontainer/hooks/
+cp "$TEMPLATE_DIR/.devcontainer/hooks/on-remove.sh"      .devcontainer/hooks/
 
 chmod +x .devcontainer/init.sh
 chmod +x .devcontainer/hooks/post-start.sh
+chmod +x .devcontainer/hooks/on-remove.sh
 
 info "Installing .env.app.template..."
 cp "$TEMPLATE_DIR/.env.app.template" .
+
+info "Installing worktree.sh..."
+cp "$TEMPLATE_DIR/worktree.sh" .
+chmod +x worktree.sh
 
 # Create .devcontainer/.gitignore for generated files
 cat > .devcontainer/.gitignore <<'GITIGNORE'
