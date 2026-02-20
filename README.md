@@ -2,7 +2,7 @@
 
 Seamless devcontainer + git worktree workflows. Run multiple feature branches simultaneously, each in its own isolated devcontainer with its own database, routed via Traefik subdomains.
 
-> **Using this as a template?** See **[CUSTOMIZING.md](CUSTOMIZING.md)** for a step-by-step guide on which files to edit and which to leave alone.
+> **Using this as a template?** See **[CUSTOMIZING.md](.agents/skills/devcontainer-wt/references/CUSTOMIZING.md)** for a step-by-step guide on which files to edit and which to leave alone.
 
 ## What You Get
 
