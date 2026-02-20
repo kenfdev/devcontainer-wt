@@ -2,11 +2,13 @@
 
 Seamless devcontainer + git worktree workflows. Run multiple feature branches simultaneously, each in its own isolated devcontainer with its own database, routed via Traefik subdomains.
 
+> **Using this as a template?** See **[CUSTOMIZING.md](CUSTOMIZING.md)** for a step-by-step guide on which files to edit and which to leave alone.
+
 ## What You Get
 
 - **Git works inside containers** -- worktree `.git` file resolution is fixed automatically via symlink (no file mutation).
 - **No port conflicts** -- Traefik routes by subdomain, so every worktree container can listen on the same internal port.
-- **Per-worktree database** -- each worktree gets its own Postgres database, created automatically on startup.
+- **Per-worktree database** -- each worktree gets its own database, created automatically on startup.
 - **Per-worktree env vars** -- `.env.app.template` is expanded per worktree with `${WORKTREE_NAME}`, `${PROJECT_NAME}`, etc.
 - **Orphan detection** -- stale containers from deleted worktrees are detected on every startup.
 
@@ -95,19 +97,18 @@ Click **"Reopen in Container"** (or run the command palette: `Dev Containers: Re
    - Derives `PROJECT_NAME` from the directory name (e.g., `myapp`).
    - Sets `WORKTREE_NAME` to the directory name (e.g., `myapp`).
    - Writes all resolved values to `.devcontainer/.env`.
-   - Sets `COMPOSE_PROFILES=infra` so Traefik and Postgres start.
+   - Sets `COMPOSE_PROFILES=infra` so Traefik (and any infrastructure services you've added) start.
    - Creates Docker network `devnet-{PROJECT_NAME}`.
    - Expands `.env.app.template` into `.devcontainer/.env.app`.
 
 2. **Docker Compose brings up containers**:
    - `traefik-{PROJECT_NAME}` -- reverse proxy on port 80 (configurable).
-   - `postgres-{PROJECT_NAME}` -- PostgreSQL 16 on port 15432 (host) / 5432 (internal).
+   - Any infrastructure services you've added (Postgres, Redis, etc.).
    - `app-{PROJECT_NAME}-{WORKTREE_NAME}` -- your app container.
 
 3. **`post-start.sh` runs inside the container** (via `postStartCommand`):
-   - Runs `npm install`.
-   - Creates database `{PROJECT_NAME}_{WORKTREE_NAME}` in Postgres (if it doesn't exist).
-   - Starts the Node.js dev server on port 3000 in the background.
+   - Applies the git worktree symlink fix (for worktree containers).
+   - Runs your project setup (dependency installation, DB init, migrations, dev server -- see [CUSTOMIZING.md](CUSTOMIZING.md)).
 
 ### Verify It Works
 
@@ -125,10 +126,7 @@ Then open your browser. Assuming you cloned into `myapp/`:
 | http://myapp.myapp.localhost | Your app (main worktree) |
 | http://traefik.myapp.localhost | Traefik dashboard (shows all routes) |
 
-You should see a page showing:
-- **Project:** myapp
-- **Worktree:** myapp
-- **Database URL:** `postgres://dev:dev@postgres-myapp:5432/myapp_myapp`
+If you've set up a dev server in `post-start.sh`, your app should be reachable. The sample app shows project/worktree info.
 
 > **Note (macOS):** `*.localhost` resolves to `127.0.0.1` out of the box. No `/etc/hosts` changes needed.
 >
@@ -162,26 +160,20 @@ Click **"Reopen in Container"** again.
    - Detects this is a worktree (`.git` is a file, not a directory).
    - Sets `PROJECT_NAME=myapp` (derived from the main repo, not the worktree directory).
    - Sets `WORKTREE_NAME=myapp-feature-x` (from the worktree directory name).
-   - Does **not** set `COMPOSE_PROFILES=infra` -- Traefik and Postgres are NOT started again.
+   - Does **not** set `COMPOSE_PROFILES=infra` -- infrastructure services are NOT started again.
    - Joins the existing `devnet-myapp` network.
 
 2. **Only the app container starts**: `app-myapp-myapp-feature-x`.
 
 3. **`post-start.sh` runs inside the container**:
    - **Creates a symlink** so the host path in `.git` resolves inside the container. This is the key worktree fix -- git commands (`log`, `blame`, `status`, `commit`) now work.
-   - Runs `npm install`.
-   - Creates database `myapp_myapp-feature-x` in the shared Postgres.
-   - Starts the dev server on port 3000.
+   - Runs your project setup (same as the main worktree).
 
 ### Verify the Feature Worktree
 
 | URL | What It Shows |
 |---|---|
 | http://myapp-feature-x.myapp.localhost | Your app (feature-x worktree) |
-
-The page should now show:
-- **Worktree:** myapp-feature-x
-- **Database URL:** `postgres://dev:dev@postgres-myapp:5432/myapp_myapp-feature-x`
 
 Check the Traefik dashboard at `http://traefik.myapp.localhost` -- you should see routes for both worktrees.
 
@@ -215,61 +207,22 @@ code ../myapp-pr-42
 Each one gets:
 - Its own VS Code window and devcontainer.
 - Its own Traefik route: `http://myapp-feature-y.myapp.localhost`, `http://myapp-pr-42.myapp.localhost`.
-- Its own Postgres database: `myapp_myapp-feature-y`, `myapp_myapp-pr-42`.
+- Its own database (if you've configured one).
 - Full git support inside the container.
 
 ## Step 4: Clean Up a Worktree
 
-### Option A: Git Alias (Recommended)
-
-Add this to your `~/.gitconfig`:
-
-```ini
-[alias]
-  wt-remove = "!f() { \
-    docker compose -f \"$1/.devcontainer/docker-compose.yml\" --env-file \"$1/.devcontainer/.env\" down 2>/dev/null; \
-    git worktree remove \"$1\"; \
-  }; f"
-```
-
-Then clean up with a single command:
+Just use standard git:
 
 ```bash
-# From the main repo directory
-cd myapp
-git wt-remove ../myapp-feature-x
-```
-
-This stops the container and removes the worktree directory. `git worktree remove` will refuse to delete if there are uncommitted changes (use `--force` to override).
-
-### Option B: Manual Cleanup
-
-```bash
-# Stop the container
-docker compose -f ../myapp-feature-x/.devcontainer/docker-compose.yml \
-  --env-file ../myapp-feature-x/.devcontainer/.env down
-
-# Remove the worktree
 git worktree remove ../myapp-feature-x
 ```
 
-### Database Cleanup
+`git worktree remove` will refuse to delete if there are uncommitted changes (use `--force` to override).
 
-The per-worktree database is **not** automatically deleted. To drop it manually:
+The orphaned container is automatically cleaned up the next time **any** worktree's devcontainer starts -- `init.sh` detects containers whose worktree directory no longer exists and removes them.
 
-```bash
-docker exec -it postgres-myapp \
-  psql -U dev -c "DROP DATABASE IF EXISTS myapp_feature_x;"
-```
-
-### Orphaned Containers
-
-If you delete a worktree directory without stopping its container, the next time **any** worktree starts, `init.sh` will detect the orphan and print a warning:
-
-```
-[devcontainer-wt] Orphaned container detected: app-myapp-feature-x (worktree dir: /path/to/myapp-feature-x)
-[devcontainer-wt] Run 'docker rm -f app-myapp-feature-x' to clean up.
-```
+> **Note:** Per-worktree databases are **not** automatically deleted. If you've set up a database, drop it manually (e.g., `docker exec -it postgres-myapp psql -U dev -c "DROP DATABASE IF EXISTS myapp_feature_x;"`).
 
 ## Customization
 
