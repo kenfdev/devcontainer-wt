@@ -1,6 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 
+# =============================================================================
+# DO NOT EDIT — devcontainer-wt template engine
+# This script runs on the HOST before the container starts. It detects the
+# worktree/project context, creates the Docker network, generates .env files,
+# and checks for orphaned containers.
+# =============================================================================
+
 # --- Worktree and project detection ---
 
 WORKTREE_DIR_NAME=$(basename "$PWD")
@@ -59,9 +66,11 @@ else
   touch .devcontainer/.env.app
 fi
 
-# --- Orphan container detection ---
+# --- Orphan container cleanup ---
 
-# Check for containers whose worktree directories no longer exist.
+# Automatically stop and remove containers whose worktree directories no longer
+# exist (e.g., after `git worktree remove`). This runs every time any worktree
+# starts, so orphans are cleaned up without manual intervention.
 orphans=$(docker ps --filter "label=devcontainer-wt.project=${PROJECT_NAME}" \
   --format '{{.Names}} {{.Label "devcontainer-wt.worktree-dir"}}' 2>/dev/null || true)
 
@@ -70,7 +79,8 @@ if [ -n "$orphans" ]; then
     [ -z "$container_name" ] && continue
     if [ ! -d "$worktree_dir" ]; then
       echo "[devcontainer-wt] Orphaned container detected: $container_name (worktree dir: $worktree_dir)"
-      echo "[devcontainer-wt] Run 'docker rm -f $container_name' to clean up."
+      echo "[devcontainer-wt] Removing orphaned container..."
+      docker rm -f "$container_name" 2>/dev/null || true
     fi
   done
 fi
