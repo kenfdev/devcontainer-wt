@@ -591,6 +591,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-web.rule=Host(`${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-web.entrypoints=web"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-web.loadbalancer.server.port=3000"
     networks:
       - devnet
@@ -603,6 +604,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.rule=Host(`api.${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.entrypoints=web"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-api.loadbalancer.server.port=4000"
     networks:
       - devnet
@@ -617,6 +619,12 @@ services:
 ```
 
 Each service gets its own Traefik route: the frontend at `feature-x.myapp.localhost`, the API at `api.feature-x.myapp.localhost`.
+
+> **Note:** The above example uses separate containers (one service per container), so Traefik automatically associates each router with the single service on that container. If you use a **single container with multiple Traefik services** (e.g., a monorepo — see CUSTOMIZING.md), you must add an explicit `.service` label on each router:
+> ```yaml
+> - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.service=${PROJECT_NAME}-${WORKTREE_NAME}-ui"
+> ```
+> Without this, Traefik cannot determine which backend service each router should use.
 
 ## Shared Build Caches
 

@@ -288,6 +288,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-web.rule=Host(`${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-web.entrypoints=web"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-web.loadbalancer.server.port=3000"
     networks:
       - devnet
@@ -300,10 +301,13 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.rule=Host(`api.${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.entrypoints=web"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-api.loadbalancer.server.port=4000"
     networks:
       - devnet
 ```
+
+> **Note:** Each container above has only one Traefik service, so router-to-service association is automatic. If you put multiple services on a **single** container (see the monorepo pattern below), you must add an explicit `.service` label on each router.
 
 ### Monorepo / Turborepo (recommended: single container, multiple routes)
 
@@ -315,7 +319,9 @@ This is the recommended approach because:
 - Fewer containers per worktree = less resource overhead (important when running many worktrees in parallel).
 - Shared packages (e.g., `packages/shared`) are naturally accessible to all apps.
 
-**`docker-compose.yml`** — add multiple Traefik routers on the same `app` service, each pointing to a different port:
+**`docker-compose.yml`** — add multiple Traefik routers on the same `app` service, each pointing to a different port.
+
+**Important:** When a single container has multiple Traefik services, you **must** add a `.service` label on each router to explicitly associate it with the correct service. Without this, Traefik cannot determine which backend service each router should use and routing will fail.
 
 ```yaml
 services:
@@ -332,10 +338,12 @@ services:
       # UI app (port 3000)
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.rule=Host(`${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.entrypoints=web"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.service=${PROJECT_NAME}-${WORKTREE_NAME}-ui"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-ui.loadbalancer.server.port=3000"
       # API app (port 4000)
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.rule=Host(`api.${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.entrypoints=web"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.service=${PROJECT_NAME}-${WORKTREE_NAME}-api"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-api.loadbalancer.server.port=4000"
       # Orphan detection labels
       - "devcontainer-wt=true"
