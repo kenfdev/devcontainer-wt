@@ -53,7 +53,7 @@ These files contain the core devcontainer-wt machinery. Modifying them will brea
 
 | File | Purpose |
 |---|---|
-| `.devcontainer/init.sh` | Host-side worktree detection, `.env` generation, orphan detection |
+| `.devcontainer/init.sh` | Host-side worktree detection, `.env` generation |
 | `.devcontainer/hooks/post-start.sh` (git symlink block) | The `if [ -f ".git" ]` section that fixes git inside worktree containers |
 | `.devcontainer/docker-compose.yml` (volumes, labels, env, networks) | Core volume mounts, Traefik labels, devcontainer-wt metadata labels, networking |
 | `.devcontainer/docker-compose.infra.yml` (traefik service, networks) | Traefik reverse proxy configuration and network definition |
@@ -70,6 +70,7 @@ These files are meant to be adapted for each project.
 | `.devcontainer/docker-compose.infra.yml` | Add services (Postgres, Redis, etc.) — must have `profiles: [infra]` |
 | `.devcontainer/docker-compose.yml` | Change `loadbalancer.server.port` (default 3000), add shared cache volumes |
 | `.devcontainer/hooks/post-start.sh` | Project setup below the `CUSTOMIZE` marker: deps, DB init, migrations |
+| `.devcontainer/hooks/on-remove.sh` | Cleanup hook for worktree removal: drop DB, clear caches. Called by `./worktree.sh remove` and `prune`. |
 | `.env.app.template` | Per-worktree environment variables with `${VARIABLE}` placeholders |
 
 ## How to Adopt the Template
@@ -133,40 +134,46 @@ These variables are available in `post-start.sh`, `.env.app.template`, and as co
 | Variable | Example | Source |
 |---|---|---|
 | `WORKTREE_NAME` | `myapp-feature-x` | Sanitized directory name |
+| `BRANCH_NAME` | `feature-x` | Sanitized git branch name (used in subdomain routing) |
 | `PROJECT_NAME` | `myapp` | Main repo directory name (or `$PROJECT_NAME` override) |
 | `MAIN_REPO_NAME` | `myapp` | Main repo directory name |
 | `NETWORK_NAME` | `devnet-myapp` | Docker network name |
 
 ## URL Pattern
 
-All URLs follow: `http://{WORKTREE_NAME}.{PROJECT_NAME}.localhost`
+All URLs follow: `http://{BRANCH_NAME}.{PROJECT_NAME}.localhost`
 
-- Main worktree: `http://myapp.myapp.localhost`
-- Feature worktree: `http://myapp-feature-x.myapp.localhost`
+- Main worktree (branch `main`): `http://main.myapp.localhost`
+- Feature worktree (branch `feature-x`): `http://feature-x.myapp.localhost`
 - Traefik dashboard: `http://traefik.myapp.localhost`
 
-## Worktree Workflow
+## Worktree CLI (`./worktree.sh`)
+
+The project includes a CLI for worktree lifecycle management:
+
+| Command | Description |
+|---|---|
+| `./worktree.sh add [branch]` | Create a new worktree (prompts for branch if omitted) |
+| `./worktree.sh remove <path>` | Run cleanup hook, stop container, remove worktree, prune orphans |
+| `./worktree.sh list` | Show all worktrees with container status |
+| `./worktree.sh prune` | Find and remove orphaned containers |
 
 ### Create a feature worktree
 
 ```bash
 # From the main repo directory (on the host)
-git worktree add ../myapp-feature-x -b feature-x
+./worktree.sh add feature-x
 code ../myapp-feature-x
 # Click "Reopen in Container"
 ```
 
 ### Clean up a worktree
 
-Just use standard git:
-
 ```bash
-git worktree remove ../myapp-feature-x
+./worktree.sh remove ../myapp-feature-x
 ```
 
-The orphaned container is automatically cleaned up the next time any worktree's
-devcontainer starts (`init.sh` detects containers whose worktree directory no
-longer exists and removes them).
+This runs the cleanup hook (`.devcontainer/hooks/on-remove.sh`), stops the container, removes the worktree, and prunes orphans.
 
 ## Troubleshooting
 

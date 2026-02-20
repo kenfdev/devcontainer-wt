@@ -8,7 +8,7 @@ Every file in the template falls into one of two categories:
 
 | File | Category | What to do |
 |---|---|---|
-| `.devcontainer/init.sh` | **DO NOT EDIT** | Template engine. Detects worktree context, generates `.env` files, creates Docker network, detects orphans. |
+| `.devcontainer/init.sh` | **DO NOT EDIT** | Template engine. Detects worktree context, generates `.env` files, creates Docker network. |
 | `.devcontainer/docker-compose.yml` (core sections) | **DO NOT EDIT** | Template engine. Volume mounts, labels, environment, networking. Exception: change the `loadbalancer.server.port` if your app doesn't use port 3000. |
 | `.devcontainer/docker-compose.infra.yml` (traefik + networks) | **DO NOT EDIT** | Template engine. Traefik reverse proxy and network definition. |
 | `.devcontainer/hooks/post-start.sh` (git symlink fix) | **DO NOT EDIT** | Template engine. The `if [ -f ".git" ]` block that creates the symlink. |
@@ -19,7 +19,9 @@ Every file in the template falls into one of two categories:
 | `.devcontainer/docker-compose.infra.yml` (your services) | **CUSTOMIZE** | Add infrastructure services (Postgres, Redis, etc.) with `profiles: [infra]`. |
 | `.devcontainer/docker-compose.yml` (port, caches) | **CUSTOMIZE** | Change the app port. Add shared build cache volumes. |
 | `.devcontainer/hooks/post-start.sh` (project setup) | **CUSTOMIZE** | Add dependency installation, DB initialization, migrations. |
+| `.devcontainer/hooks/on-remove.sh` | **CUSTOMIZE** | Cleanup hook for worktree removal. Drop databases, clear caches. |
 | `.env.app.template` | **CUSTOMIZE** | Define per-worktree environment variables using `${VARIABLE}` placeholders. |
+| `worktree.sh` | **DO NOT EDIT** | Worktree lifecycle CLI. Use `./worktree.sh add`, `remove`, `list`, `prune`. |
 | `.gitignore` | **CUSTOMIZE** | Add your project's ignore patterns. Keep the existing devcontainer-wt entries. |
 
 ## Adoption Checklist
@@ -131,7 +133,21 @@ PGPASSWORD=dev psql -h "postgres-${PROJECT_NAME}" -U dev -tc \
 npx prisma migrate deploy
 ```
 
-### 7. Set the app port
+### 7. Set up cleanup hooks
+
+Edit `.devcontainer/hooks/on-remove.sh` to add project-specific cleanup that runs when a worktree is removed (via `./worktree.sh remove` or `./worktree.sh prune`):
+
+```bash
+# Drop per-worktree PostgreSQL database
+docker exec "postgres-${PROJECT_NAME}" dropdb -U dev --if-exists "${PROJECT_NAME}_${WORKTREE_NAME}" 2>/dev/null || true
+
+# Drop per-worktree MySQL database
+# docker exec "mysql-${PROJECT_NAME}" mysql -u dev -pdev -e "DROP DATABASE IF EXISTS \`${PROJECT_NAME}_${WORKTREE_NAME}\`" 2>/dev/null || true
+```
+
+Available environment variables: `WORKTREE_NAME`, `PROJECT_NAME`, `BRANCH_NAME` (may be empty for orphans).
+
+### 8. Set the app port
 
 If your app listens on a port other than 3000, update the Traefik label in `.devcontainer/docker-compose.yml`:
 
@@ -139,7 +155,7 @@ If your app listens on a port other than 3000, update the Traefik label in `.dev
 - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}.loadbalancer.server.port=4000"
 ```
 
-### 8. Add VS Code extensions
+### 9. Add VS Code extensions
 
 Edit `.devcontainer/devcontainer.json`:
 
@@ -154,7 +170,7 @@ Edit `.devcontainer/devcontainer.json`:
 }
 ```
 
-### 9. (Optional) Add shared build caches
+### 10. (Optional) Add shared build caches
 
 To share package manager caches across worktrees, uncomment and adapt the volumes section in `.devcontainer/docker-compose.yml`:
 
@@ -168,12 +184,12 @@ volumes:
     name: "${PROJECT_NAME}-npm-cache"
 ```
 
-### 10. Test it
+### 11. Test it
 
 ```bash
 # Open in VS Code and "Reopen in Container"
 code .
-# Verify your app is reachable at http://{WORKTREE}.{PROJECT}.localhost
+# Verify your app is reachable at http://{BRANCH}.{PROJECT}.localhost
 ```
 
 ## Common Scenarios
@@ -287,7 +303,7 @@ services:
     container_name: "frontend-${PROJECT_NAME}-${WORKTREE_NAME}"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-web.rule=Host(`${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-web.rule=Host(`${BRANCH_NAME}.${PROJECT_NAME}.localhost`)"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-web.entrypoints=web"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-web.loadbalancer.server.port=3000"
     networks:
@@ -300,7 +316,7 @@ services:
     container_name: "api-${PROJECT_NAME}-${WORKTREE_NAME}"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.rule=Host(`api.${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.rule=Host(`api.${BRANCH_NAME}.${PROJECT_NAME}.localhost`)"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.entrypoints=web"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-api.loadbalancer.server.port=4000"
     networks:
@@ -336,12 +352,12 @@ services:
     labels:
       - "traefik.enable=true"
       # UI app (port 3000)
-      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.rule=Host(`${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.rule=Host(`${BRANCH_NAME}.${PROJECT_NAME}.localhost`)"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.entrypoints=web"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-ui.service=${PROJECT_NAME}-${WORKTREE_NAME}-ui"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-ui.loadbalancer.server.port=3000"
       # API app (port 4000)
-      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.rule=Host(`api.${WORKTREE_NAME}.${PROJECT_NAME}.localhost`)"
+      - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.rule=Host(`api.${BRANCH_NAME}.${PROJECT_NAME}.localhost`)"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.entrypoints=web"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}-api.service=${PROJECT_NAME}-${WORKTREE_NAME}-api"
       - "traefik.http.services.${PROJECT_NAME}-${WORKTREE_NAME}-api.loadbalancer.server.port=4000"
@@ -357,8 +373,8 @@ services:
       - PROJECT_NAME=${PROJECT_NAME}
       - MAIN_REPO_NAME=${MAIN_REPO_NAME}
     extra_hosts:
-      - "${WORKTREE_NAME}.${PROJECT_NAME}.localhost:host-gateway"
-      - "api.${WORKTREE_NAME}.${PROJECT_NAME}.localhost:host-gateway"
+      - "${BRANCH_NAME}.${PROJECT_NAME}.localhost:host-gateway"
+      - "api.${BRANCH_NAME}.${PROJECT_NAME}.localhost:host-gateway"
     networks:
       - devnet
 ```

@@ -7,8 +7,8 @@ Seamless devcontainer + git worktree workflows. Run multiple feature branches si
 - **Git works inside containers** -- worktree `.git` file resolution is fixed automatically via symlink (no file mutation).
 - **No port conflicts** -- Traefik routes by subdomain, so every worktree container can listen on the same internal port.
 - **Per-worktree database** -- each worktree gets its own database, created automatically on startup.
-- **Per-worktree env vars** -- `.env.app.template` is expanded per worktree with `${WORKTREE_NAME}`, `${PROJECT_NAME}`, etc.
-- **Orphan detection** -- stale containers from deleted worktrees are detected on every startup.
+- **Per-worktree env vars** -- `.env.app.template` is expanded per worktree with `${WORKTREE_NAME}`, `${BRANCH_NAME}`, `${PROJECT_NAME}`, etc.
+- **Worktree CLI** -- `./worktree.sh` manages the full worktree lifecycle (create, remove, list, prune) with cleanup hooks.
 
 ## Install
 
@@ -31,21 +31,21 @@ After installing, see **[CUSTOMIZING.md](.agents/skills/devcontainer-wt/referenc
 All URLs follow this pattern:
 
 ```
-http://{WORKTREE_NAME}.{PROJECT_NAME}.localhost
+http://{BRANCH_NAME}.{PROJECT_NAME}.localhost
 ```
 
 - **`PROJECT_NAME`** = your main repo's directory name (e.g., if you cloned into `myapp/`, the project name is `myapp`).
-- **`WORKTREE_NAME`** = the worktree's directory name (e.g., `myapp` for the main worktree, `myapp-feature-x` for a worktree).
+- **`BRANCH_NAME`** = the current git branch name, sanitized for DNS (slashes become hyphens, e.g., `feature/login` becomes `feature-login`).
 
 For example, if you clone the repo into a directory called `myapp`:
 
 | What | URL |
 |---|---|
-| Main worktree app | `http://myapp.myapp.localhost` |
-| Feature worktree `myapp-feature-x` | `http://myapp-feature-x.myapp.localhost` |
+| Main worktree app (branch `main`) | `http://main.myapp.localhost` |
+| Feature worktree (branch `feature-x`) | `http://feature-x.myapp.localhost` |
 | Traefik dashboard | `http://traefik.myapp.localhost` |
 
-> **Tip:** After the container starts, check `.devcontainer/.env` to see the resolved values for `PROJECT_NAME` and `WORKTREE_NAME`. These determine your URLs.
+> **Tip:** After the container starts, check `.devcontainer/.env` to see the resolved values for `PROJECT_NAME` and `BRANCH_NAME`. These determine your URLs.
 
 ## Prerequisites
 
@@ -69,12 +69,11 @@ myapp/                              # <-- you are here (main worktree)
     init.sh                         # host-side init script
     hooks/
       post-start.sh                 # in-container setup script
+      on-remove.sh                  # cleanup hook for worktree removal
     .env                            # generated (gitignored)
     .env.app                        # generated (gitignored)
   .env.app.template                 # per-worktree env var template (tracked)
-  package.json
-  src/
-    server.js                       # sample app
+  worktree.sh                       # worktree lifecycle CLI
 
 myapp-feature-x/                    # worktree (sibling directory)
   .git                              # file pointing to ../myapp/.git/worktrees/feature-x
@@ -110,6 +109,7 @@ Click **"Reopen in Container"** (or run the command palette: `Dev Containers: Re
    - Detects this is the main worktree (`.git` is a directory).
    - Derives `PROJECT_NAME` from the directory name (e.g., `myapp`).
    - Sets `WORKTREE_NAME` to the directory name (e.g., `myapp`).
+   - Sets `BRANCH_NAME` from the current git branch (e.g., `main`).
    - Writes all resolved values to `.devcontainer/.env`.
    - Sets `COMPOSE_PROFILES=infra` so Traefik (and any infrastructure services you've added) start.
    - Creates Docker network `devnet-{PROJECT_NAME}`.
@@ -130,14 +130,14 @@ First, check the generated values:
 
 ```bash
 cat .devcontainer/.env
-# Look for PROJECT_NAME and WORKTREE_NAME -- these determine your URLs.
+# Look for PROJECT_NAME and BRANCH_NAME -- these determine your URLs.
 ```
 
 Then open your browser. Assuming you cloned into `myapp/`:
 
 | URL | What It Shows |
 |---|---|
-| http://myapp.myapp.localhost | Your app (main worktree) |
+| http://main.myapp.localhost | Your app (main worktree) |
 | http://traefik.myapp.localhost | Traefik dashboard (shows all routes) |
 
 If you've set up a dev server in `post-start.sh`, your app should be reachable. The sample app shows project/worktree info.
@@ -154,8 +154,8 @@ With the main worktree running, create a new worktree from the **host terminal**
 # From the main repo directory
 cd myapp
 
-# Create a worktree in a sibling directory with a new branch
-git worktree add ../myapp-feature-x -b feature-x
+# Create a worktree using the CLI
+./worktree.sh add feature-x
 ```
 
 This creates `myapp-feature-x/` next to `myapp/` with a `.git` **file** (not directory) pointing back to the main repo's git database.
@@ -166,6 +166,8 @@ Now open it in VS Code:
 code ../myapp-feature-x
 ```
 
+> **Tip:** You can also run `./worktree.sh add` without arguments to be prompted for a branch name, or use the standard git command directly: `git worktree add ../myapp-feature-x -b feature-x`.
+
 Click **"Reopen in Container"** again.
 
 ### What Happens This Time
@@ -174,6 +176,7 @@ Click **"Reopen in Container"** again.
    - Detects this is a worktree (`.git` is a file, not a directory).
    - Sets `PROJECT_NAME=myapp` (derived from the main repo, not the worktree directory).
    - Sets `WORKTREE_NAME=myapp-feature-x` (from the worktree directory name).
+   - Sets `BRANCH_NAME=feature-x` (from the current git branch).
    - Does **not** set `COMPOSE_PROFILES=infra` -- infrastructure services are NOT started again.
    - Joins the existing `devnet-myapp` network.
 
@@ -187,7 +190,7 @@ Click **"Reopen in Container"** again.
 
 | URL | What It Shows |
 |---|---|
-| http://myapp-feature-x.myapp.localhost | Your app (feature-x worktree) |
+| http://feature-x.myapp.localhost | Your app (feature-x worktree) |
 
 Check the Traefik dashboard at `http://traefik.myapp.localhost` -- you should see routes for both worktrees.
 
@@ -209,7 +212,7 @@ Repeat Step 2 for as many branches as you need:
 
 ```bash
 # Another feature
-git worktree add ../myapp-feature-y -b feature-y
+./worktree.sh add feature-y
 code ../myapp-feature-y
 
 # PR review
@@ -220,23 +223,37 @@ code ../myapp-pr-42
 
 Each one gets:
 - Its own VS Code window and devcontainer.
-- Its own Traefik route: `http://myapp-feature-y.myapp.localhost`, `http://myapp-pr-42.myapp.localhost`.
+- Its own Traefik route: `http://feature-y.myapp.localhost`, `http://some-pr-branch.myapp.localhost`.
 - Its own database (if you've configured one).
 - Full git support inside the container.
 
 ## Step 4: Clean Up a Worktree
 
-Just use standard git:
+Use the CLI to remove a worktree and its container in one step:
 
 ```bash
-git worktree remove ../myapp-feature-x
+./worktree.sh remove ../myapp-feature-x
 ```
 
-`git worktree remove` will refuse to delete if there are uncommitted changes (use `--force` to override).
+This will:
+1. Run the cleanup hook (`.devcontainer/hooks/on-remove.sh`) for project-specific cleanup (e.g., dropping databases).
+2. Stop and remove the worktree's container.
+3. Remove the worktree directory (refuses if there are uncommitted changes -- use `git worktree remove --force` manually to override).
+4. Prune any other orphaned containers.
 
-The orphaned container is automatically cleaned up the next time **any** worktree's devcontainer starts -- `init.sh` detects containers whose worktree directory no longer exists and removes them.
+To clean up orphaned containers without removing a specific worktree:
 
-> **Note:** Per-worktree databases are **not** automatically deleted. If you've set up a database, drop it manually (e.g., `docker exec -it postgres-myapp psql -U dev -c "DROP DATABASE IF EXISTS myapp_feature_x;"`).
+```bash
+./worktree.sh prune
+```
+
+To see all worktrees and their container status:
+
+```bash
+./worktree.sh list
+```
+
+> **Tip:** Customize `.devcontainer/hooks/on-remove.sh` to add project-specific cleanup (dropping databases, clearing caches). See [CUSTOMIZING.md](.agents/skills/devcontainer-wt/references/CUSTOMIZING.md).
 
 ## Customization
 
@@ -249,7 +266,7 @@ export TRAEFIK_PORT=8000
 code myapp
 ```
 
-Then access your app at `http://{WORKTREE_NAME}.{PROJECT_NAME}.localhost:8000`.
+Then access your app at `http://{BRANCH_NAME}.{PROJECT_NAME}.localhost:8000`.
 
 ### Change the Postgres Host Port
 
@@ -362,8 +379,8 @@ The `.git` file is **never modified**. The host is unaffected.
     v
   Traefik (port 80)
     |
-    |-- {WORKTREE}.{PROJECT}.localhost  --> app-{PROJECT}-{WORKTREE}:3000
-    |-- traefik.{PROJECT}.localhost     --> Traefik dashboard
+    |-- {BRANCH}.{PROJECT}.localhost    --> app-{PROJECT}-{WORKTREE}:3000
+    |-- traefik.{PROJECT}.localhost    --> Traefik dashboard
     |
   Docker Network: devnet-{PROJECT}
     |
@@ -389,8 +406,8 @@ The `.git` file is **never modified**. The host is unaffected.
 **Option A: `/etc/hosts` (manual, per worktree)**
 
 ```
-127.0.0.1 myapp.myapp.localhost
-127.0.0.1 myapp-feature-x.myapp.localhost
+127.0.0.1 main.myapp.localhost
+127.0.0.1 feature-x.myapp.localhost
 127.0.0.1 traefik.myapp.localhost
 ```
 
@@ -412,10 +429,10 @@ docker ps
 
 ### App not reachable at `*.localhost`
 
-1. Check your actual URLs: `cat .devcontainer/.env` to see `PROJECT_NAME` and `WORKTREE_NAME`.
+1. Check your actual URLs: `cat .devcontainer/.env` to see `PROJECT_NAME` and `BRANCH_NAME`.
 2. Check Traefik is running: `docker ps | grep traefik`
 3. Check the Traefik dashboard: `http://traefik.{PROJECT_NAME}.localhost`
-4. Test with curl: `curl -H "Host: {WORKTREE}.{PROJECT}.localhost" http://localhost/`
+4. Test with curl: `curl -H "Host: {BRANCH}.{PROJECT}.localhost" http://localhost/`
 5. On Linux, check DNS resolution (see [Platform Notes](#linux-native-docker)).
 
 ### Git commands fail inside a worktree container
@@ -442,7 +459,7 @@ Set a custom Traefik port before starting:
 export TRAEFIK_PORT=8000
 ```
 
-Then access apps at `http://{WORKTREE}.{PROJECT}.localhost:8000`.
+Then access apps at `http://{BRANCH}.{PROJECT}.localhost:8000`.
 
 ### `envsubst: command not found` (macOS)
 
@@ -456,5 +473,5 @@ brew install gettext
 
 - **Main worktree must start first.** Infrastructure services (Traefik, Postgres) only run from the main worktree.
 - **Docker Compose only.** The template requires Docker Compose as the devcontainer backend.
-- **Name collisions.** Branch names like `feature/login` and `feature-login` both sanitize to `feature_login`. Use distinct directory names.
+- **Name collisions.** Branch names like `feature/login` and `feature-login` both sanitize to `feature-login`. Use distinct branch names.
 - **GitHub Codespaces not supported.** Different constraints (no Traefik, no sibling worktrees).
