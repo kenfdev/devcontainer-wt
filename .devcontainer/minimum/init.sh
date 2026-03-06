@@ -45,6 +45,16 @@ PROJECT_NAME=${PROJECT_NAME}
 LOCAL_WORKSPACE_FOLDER=${LOCAL_WORKSPACE_FOLDER}
 EOF
 
+# --- Ensure docker-compose.local.yml exists ---
+
+if [ ! -f ".devcontainer/docker-compose.local.yml" ]; then
+  cat > .devcontainer/docker-compose.local.yml <<'LOCALEOF'
+# Personal local overrides (gitignored). Add custom volume mounts, etc.
+# This file is auto-created as an empty stub if it doesn't exist.
+LOCALEOF
+  echo "[devcontainer-wt] Created empty docker-compose.local.yml stub."
+fi
+
 # --- Expand .env.app.template → .env.app ---
 
 # The .env.app.template uses ${VARIABLE} placeholders.

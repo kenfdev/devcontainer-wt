@@ -1,0 +1,11 @@
+# .worktreeinclude — files to copy from main worktree when creating new worktrees
+#
+# List glob patterns (one per line) for gitignored files that should be copied
+# to new worktrees. These are typically generated config files that aren't
+# tracked in git but are needed for the devcontainer to work.
+#
+# Lines starting with # are comments. Empty lines are ignored.
+# Patterns are expanded using bash globbing relative to the repo root.
+
+# Per-worktree local compose overrides (personal volume mounts, etc.)
+.devcontainer/*.local.*

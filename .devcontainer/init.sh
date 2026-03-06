@@ -57,6 +57,18 @@ if [ -d ".git" ]; then
   echo "COMPOSE_PROFILES=infra" >> .devcontainer/.env
 fi
 
+# --- Ensure docker-compose.local.yml exists ---
+
+# Create an empty stub so docker-compose doesn't fail when devcontainer.json
+# lists it. Users can add personal overrides (volume mounts, etc.) to this file.
+if [ ! -f ".devcontainer/docker-compose.local.yml" ]; then
+  cat > .devcontainer/docker-compose.local.yml <<'LOCALEOF'
+# Personal local overrides (gitignored). Add custom volume mounts, etc.
+# This file is auto-created as an empty stub if it doesn't exist.
+LOCALEOF
+  echo "[devcontainer-wt] Created empty docker-compose.local.yml stub."
+fi
+
 # --- Expand .env.app.template → .env.app ---
 
 # The .env.app.template uses ${VARIABLE} placeholders.

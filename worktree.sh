@@ -50,6 +50,46 @@ detect_project() {
   PROJECT_NAME="${PROJECT_NAME:-$MAIN_REPO_NAME}"
 }
 
+# --- Worktreeinclude file copy ---
+
+# Copy files matching patterns in .worktreeinclude and .worktreeinclude.local
+# from the main worktree to a target worktree directory.
+copy_worktreeinclude_files() {
+  local target_root="$1"
+  local include_file="${MAIN_REPO_DIR}/.worktreeinclude"
+  local local_file="${MAIN_REPO_DIR}/.worktreeinclude.local"
+
+  if [ ! -f "$include_file" ] && [ ! -f "$local_file" ]; then
+    return
+  fi
+
+  _copy_from_include_file "$include_file" "$target_root"
+  _copy_from_include_file "$local_file" "$target_root"
+}
+
+_copy_from_include_file() {
+  local include_file="$1" target_root="$2"
+
+  [ -f "$include_file" ] || return 0
+
+  while IFS= read -r line; do
+    # Skip comments and empty lines
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    (
+      cd "$MAIN_REPO_DIR"
+      shopt -s dotglob globstar nullglob
+      for f in $line; do
+        [[ "$f" == *node_modules* ]] && continue
+        if [ -f "$f" ]; then
+          mkdir -p "${target_root}/$(dirname "$f")"
+          cp "$f" "${target_root}/${f}"
+          info "  Copied: ${f}"
+        fi
+      done
+    )
+  done < "$include_file"
+}
+
 # --- Cleanup hook ---
 
 # Run the on-remove.sh hook if it exists.
@@ -86,6 +126,9 @@ cmd_add() {
 
   info "Creating worktree at ${BOLD}${worktree_path}${NC} (branch: ${branch})..."
   git worktree add "$worktree_path" -b "$branch"
+
+  # Copy files listed in .worktreeinclude / .worktreeinclude.local
+  copy_worktreeinclude_files "$worktree_path"
 
   echo
   success "Worktree created: ${worktree_path}"
