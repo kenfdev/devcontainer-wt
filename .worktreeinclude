@@ -9,3 +9,6 @@
 
 # Per-worktree local compose overrides (personal volume mounts, etc.)
 .devcontainer/*.local.*
+
+# Per-developer devcontainer config (copied from template)
+.devcontainer/devcontainer.json
