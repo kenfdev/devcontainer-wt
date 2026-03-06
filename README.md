@@ -18,6 +18,30 @@ Run this from your project's root directory:
 curl -fsSL https://raw.githubusercontent.com/kenfdev/devcontainer-wt/main/install.sh | bash
 ```
 
+### Minimum mode
+
+For projects that don't need Traefik routing or shared infrastructure (CLI tools, libraries, etc.), use `--minimum`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kenfdev/devcontainer-wt/main/install.sh | bash -s -- --minimum
+```
+
+Minimum mode gives you:
+- Git worktree fix (the primary reason to use devcontainer-wt)
+- Per-worktree containers with full isolation
+- Per-worktree env vars (via `.env.app.template`)
+- Worktree CLI (`./worktree.sh`) for lifecycle management
+- Orphan container detection
+
+What it skips:
+- No Traefik reverse proxy (access your app via VS Code port forwarding)
+- No shared infrastructure services (no Docker Compose profiles)
+- No custom Docker network (each worktree uses its own default network)
+
+You can upgrade to full mode later by re-running the installer without `--minimum`.
+
+### Full mode (default)
+
 The installer will:
 - Download the template files from GitHub
 - Set up `.devcontainer/` with all required configuration

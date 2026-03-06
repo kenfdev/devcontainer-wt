@@ -10,14 +10,32 @@ set -euo pipefail
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/kenfdev/devcontainer-wt/main/install.sh | bash
 #
+# Minimum mode (no Traefik, no shared infra, no custom network):
+#   curl -fsSL https://raw.githubusercontent.com/kenfdev/devcontainer-wt/main/install.sh | bash -s -- --minimum
+#
 # Or download and run:
 #   curl -fsSL -o install.sh https://raw.githubusercontent.com/kenfdev/devcontainer-wt/main/install.sh
 #   chmod +x install.sh
-#   ./install.sh
+#   ./install.sh [--minimum]
 # =============================================================================
 
 REPO="kenfdev/devcontainer-wt"
 BRANCH="main"
+MODE="full"
+
+# --- Parse arguments ---
+
+for arg in "$@"; do
+  case "$arg" in
+    --minimum) MODE="minimum" ;;
+    -h|--help)
+      echo "Usage: install.sh [--minimum]"
+      echo "  --minimum  Install simplified template (no Traefik, no shared infra)"
+      exit 0
+      ;;
+    *) echo "Unknown option: $arg" >&2; exit 1 ;;
+  esac
+done
 
 # --- Colors ---
 
@@ -58,7 +76,7 @@ if ! git rev-parse --git-dir > /dev/null 2>&1; then
 fi
 
 echo
-info "${BOLD}Installing devcontainer-wt template${NC}"
+info "${BOLD}Installing devcontainer-wt template${NC} (mode: ${MODE})"
 info "Source: github.com/${REPO}@${BRANCH}"
 echo
 
@@ -105,12 +123,19 @@ info "Installing .devcontainer/..."
 mkdir -p .devcontainer/hooks
 
 cp "$TEMPLATE_DIR/.devcontainer/devcontainer.json"        .devcontainer/
-cp "$TEMPLATE_DIR/.devcontainer/init.sh"                  .devcontainer/
-cp "$TEMPLATE_DIR/.devcontainer/docker-compose.yml"       .devcontainer/
-cp "$TEMPLATE_DIR/.devcontainer/docker-compose.infra.yml" .devcontainer/
 cp "$TEMPLATE_DIR/.devcontainer/Dockerfile"               .devcontainer/
 cp "$TEMPLATE_DIR/.devcontainer/hooks/post-start.sh"      .devcontainer/hooks/
-cp "$TEMPLATE_DIR/.devcontainer/hooks/on-remove.sh"      .devcontainer/hooks/
+cp "$TEMPLATE_DIR/.devcontainer/hooks/on-remove.sh"       .devcontainer/hooks/
+
+if [ "$MODE" = "minimum" ]; then
+  cp "$TEMPLATE_DIR/.devcontainer/minimum/init.sh"                  .devcontainer/
+  cp "$TEMPLATE_DIR/.devcontainer/minimum/docker-compose.yml"       .devcontainer/
+  cp "$TEMPLATE_DIR/.devcontainer/minimum/docker-compose.infra.yml" .devcontainer/
+else
+  cp "$TEMPLATE_DIR/.devcontainer/init.sh"                  .devcontainer/
+  cp "$TEMPLATE_DIR/.devcontainer/docker-compose.yml"       .devcontainer/
+  cp "$TEMPLATE_DIR/.devcontainer/docker-compose.infra.yml" .devcontainer/
+fi
 
 chmod +x .devcontainer/init.sh
 chmod +x .devcontainer/hooks/post-start.sh
@@ -155,15 +180,23 @@ esac
 # --- Done ---
 
 echo
-success "devcontainer-wt installed successfully!"
+success "devcontainer-wt installed successfully! (mode: ${MODE})"
 echo
 info "${BOLD}Next steps:${NC}"
 info "  1. Edit .devcontainer/devcontainer.json  -- add language features & extensions"
 info "  2. Edit .devcontainer/Dockerfile          -- add system dependencies"
-info "  3. Edit .devcontainer/docker-compose.infra.yml -- add infra (Postgres, Redis, etc.)"
-info "  4. Edit .env.app.template                 -- add per-worktree env vars"
-info "  5. Edit .devcontainer/hooks/post-start.sh -- add project setup (deps, DB, migrations)"
-info "  6. Open in VS Code and 'Reopen in Container'"
+if [ "$MODE" = "full" ]; then
+  info "  3. Edit .devcontainer/docker-compose.infra.yml -- add infra (Postgres, Redis, etc.)"
+  info "  4. Edit .env.app.template                 -- add per-worktree env vars"
+  info "  5. Edit .devcontainer/hooks/post-start.sh -- add project setup (deps, DB, migrations)"
+  info "  6. Open in VS Code and 'Reopen in Container'"
+else
+  info "  3. Edit .devcontainer/hooks/post-start.sh -- add project setup (deps, build steps)"
+  info "  4. Open in VS Code and 'Reopen in Container'"
+  echo
+  info "To upgrade to full mode (Traefik, shared infra, custom network):"
+  info "  Re-run the installer without --minimum"
+fi
 echo
 info "Customization guide:"
 info "  https://github.com/${REPO}/blob/${BRANCH}/.agents/skills/devcontainer-wt/references/CUSTOMIZING.md"
