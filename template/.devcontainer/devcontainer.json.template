@@ -1,7 +1,7 @@
 {
   // =========================================================================
   // DO NOT EDIT the fields: name, dockerComposeFile, service, workspaceFolder,
-  // initializeCommand, postStartCommand, remoteEnv.
+  // initializeCommand, remoteEnv.
   // They are part of the devcontainer-wt template engine.
   //
   // CUSTOMIZE: features, customizations (extensions, settings).
@@ -14,7 +14,6 @@
   "service": "app",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "initializeCommand": ".devcontainer/init.sh",
-  "postStartCommand": ".devcontainer/hooks/post-start.sh",
   "remoteEnv": {
     "WORKTREE_NAME": "${localWorkspaceFolderBasename}",
     "GITHUB_TOKEN": "${localEnv:GITHUB_TOKEN}"

@@ -18,7 +18,7 @@ Working with devcontainers and git worktrees simultaneously is painful:
 
 **devcontainer-wt** is a template-only approach (no CLI wrapper) that solves these problems using existing devcontainer lifecycle hooks, Docker Compose, and external worktree management tools:
 
-- **Git fix:** Mount the git common directory at a predictable container path and create a symlink inside the container so the host path in the `.git` file resolves transparently. No file mutation — the host's `.git` file is never modified.
+- **Git fix:** Mount the git common directory at the same absolute host path inside the container so the `.git` file's host path references resolve directly. No symlink or file mutation needed.
 - **No port conflicts:** A per-project Traefik reverse proxy routes by subdomain (`feature-x.myapp.localhost`, using the branch name). No host port mapping needed per worktree. Traefik port is configurable.
 - **Shared infrastructure:** Infrastructure services (database, cache, proxy) run from a standalone `docker-compose.yml` at the project root — started with `docker compose up` on the host, completely independent of devcontainers. Per-worktree app containers join a shared Docker network.
 - **Gitignored file propagation:** `.worktreeinclude` + `.worktreeinclude.local` define glob patterns for files to copy to new worktrees. Copying is handled by worktree tool hooks (e.g., `git-wt`'s `wt.hook`).
@@ -92,7 +92,7 @@ Solo developer on macOS or Linux managing multiple feature branches simultaneous
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Git fix | Symlink inside container (no file mutation) | Creates a symlink so the host path in `.git` file resolves. The `.git` file is never modified — no host-side breakage, no restoration needed. |
+| Git fix | Same-path volume mount (no file mutation) | Mounts the git common directory at the same absolute host path inside the container. The `.git` file's host path references resolve directly. No symlink or post-start script needed. |
 | Directory layout | Sibling directories | Most common git worktree pattern. Main worktree is a natural home for shared infra. |
 | Worktree management | External tools (git-wt, wtp, raw git worktree) | Template does NOT wrap `git worktree`. Users choose their preferred tool. Template provides hook scripts that any tool can call. |
 | Port conflict solution | Traefik with subdomain routing | Single entry point, configurable port (default 80). Auto-discovers containers via Docker labels. Zero-config per worktree. |
@@ -111,8 +111,7 @@ Solo developer on macOS or Linux managing multiple feature branches simultaneous
 | Worktree hooks | `.worktree/hooks/on-create.sh` and `on-delete.sh` | Prescribed hook scripts at a well-known location. Users wire them into their worktree tool of choice (git-wt `wt.hook`/`wt.deletehook`, wtp hooks, or manual invocation). |
 | Worktreeinclude | `.worktreeinclude` + `.worktreeinclude.local` at repo root | Glob patterns for gitignored files to copy from main worktree to new worktrees. `.local` variant is personal (gitignored). Executed by `on-create.sh`. |
 | Local compose overrides | `docker-compose.local.yml` in `.devcontainer/` (gitignored) | Personal Docker Compose overrides. A `.devcontainer/docker-compose.local.yml.template` is tracked to help developers create their own. `init.sh` creates an empty stub if missing. |
-| Lifecycle hooks | Single `post-start.sh` (runs every start) | Contains git symlink fix + extension points for project setup (deps, migrations, dev server). Simpler than splitting into multiple hook files. |
-| Workspace path | Conventional `/workspaces/{name}` | Standard devcontainer path convention. Symlink approach makes this transparent. |
+| Workspace path | Conventional `/workspaces/{name}` | Standard devcontainer path convention. |
 | Compose variables | Resolved in init.sh, written to `.env` | `${localWorkspaceFolder}` is a devcontainer variable, NOT available in docker-compose.yml. All paths resolved in init.sh and passed via `.env`. |
 | VS Code extensions | Per-container installation | Each container installs its own extensions. Sharing a volume across concurrent containers is unsafe (race conditions). Declare extensions in devcontainer.json. |
 | Git authentication | VS Code auto-forwarding + `GITHUB_TOKEN` for headless | VS Code auto-forwards SSH agent and git credentials. For CLI-only usage (devcontainer CLI, AI agents), forward `GITHUB_TOKEN` via `remoteEnv`. |
@@ -149,8 +148,6 @@ myapp/                                   # main worktree
     docker-compose.local.yml.template    # template for personal overrides (tracked)
     Dockerfile                           # minimal app container image
     init.sh                              # host-side: resolves paths → .env, expands .env.app.template
-    hooks/
-      post-start.sh                      # in-container: git symlink fix + project setup extension points
     .env                                 # generated by init.sh (gitignored)
     .env.app                             # generated by init.sh from template (gitignored)
   .worktree/
@@ -256,7 +253,6 @@ docker compose up -d
   "service": "app",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "initializeCommand": ".devcontainer/init.sh",
-  "postStartCommand": ".devcontainer/hooks/post-start.sh",
   "remoteEnv": {
     "WORKTREE_NAME": "${localWorkspaceFolderBasename}",
     // For CLI-only usage (no VS Code), forward credentials explicitly:
@@ -275,9 +271,8 @@ docker compose up -d
 
 Key points:
 - `dockerComposeFile` references only the app compose and local overrides. Infrastructure is managed separately.
-- `workspaceFolder` uses conventional `/workspaces/{name}` path. The git fix is handled by `post-start.sh`.
+- `workspaceFolder` uses conventional `/workspaces/{name}` path.
 - `initializeCommand` runs on the **host** before the container starts. Generates `.env` and `.env.app` with resolved paths.
-- `postStartCommand` runs **inside** the container on every start. Creates the git symlink and runs project setup.
 - VS Code automatically forwards SSH agent and git credentials — no configuration needed.
 - `GITHUB_TOKEN` is forwarded for CLI-only / headless usage (devcontainer CLI, AI agents).
 
@@ -417,8 +412,9 @@ services:
     volumes:
       # Mount the worktree at the conventional /workspaces path
       - ${LOCAL_WORKSPACE_FOLDER}:/workspaces/${WORKTREE_NAME}:cached
-      # Mount the git common directory so the symlink target exists
-      - ${GIT_COMMON_DIR}:/workspaces/${MAIN_REPO_NAME}/.git:rw
+      # Mount the git common directory at the same absolute host path so
+      # .git file references (absolute paths) remain valid inside the container
+      - ${GIT_COMMON_DIR}:${GIT_COMMON_DIR}:cached
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.${PROJECT_NAME}-${WORKTREE_NAME}.rule=Host(`${BRANCH_NAME}.${PROJECT_NAME}.localhost`)"
@@ -476,70 +472,6 @@ FROM mcr.microsoft.com/devcontainers/base:ubuntu
 # Prefer devcontainer features for common tools (Node, Python, Go, etc.)
 # Example:
 #   RUN apt-get update && apt-get install -y postgresql-client && rm -rf /var/lib/apt/lists/*
-```
-
-### `.devcontainer/hooks/post-start.sh`
-
-Runs **inside** the container on **every start** (including restarts). Handles the git worktree symlink fix and provides extension points for project-specific setup.
-
-```bash
-#!/bin/bash
-set -euo pipefail
-
-echo "=== devcontainer-wt: starting worktree '${WORKTREE_NAME}' ==="
-
-# --- Git worktree symlink fix ---
-# If this is a worktree (not the main repo), the .git file contains a host path
-# (e.g., gitdir: /Users/you/myapp/.git/worktrees/feature-x) that doesn't resolve
-# inside the container. Instead of rewriting the file, we create a symlink so the
-# host path resolves transparently. The .git file is NEVER modified.
-if [ -f ".git" ]; then
-  host_gitdir=$(sed 's/gitdir: //' .git)
-  host_git_common="${host_gitdir%/worktrees/*}"
-
-  # Create symlink: /Users/you/myapp/.git → /workspaces/myapp/.git
-  mkdir -p "$(dirname "$host_git_common")"
-  ln -sfn "/workspaces/${MAIN_REPO_NAME}/.git" "$host_git_common"
-
-  # Verify git works
-  if git status --short > /dev/null 2>&1; then
-    echo "[devcontainer-wt] Git symlink fix applied. Git is working."
-  else
-    echo "[devcontainer-wt] WARNING: Git check failed after symlink fix."
-    echo "[devcontainer-wt] Host gitdir: $host_gitdir"
-    echo "[devcontainer-wt] Symlink: $host_git_common → /workspaces/${MAIN_REPO_NAME}/.git"
-  fi
-fi
-
-# =============================================================================
-# PROJECT SETUP — customize below for your project
-# =============================================================================
-
-# --- One-time setup (runs every start but should be idempotent) ---
-# Examples:
-#   pnpm install
-#   bundle install
-
-# --- Database initialization ---
-# Create a per-worktree database if it doesn't exist.
-# Examples:
-#   PGPASSWORD=dev psql -h "postgres-${PROJECT_NAME}" -U dev -tc \
-#     "SELECT 1 FROM pg_database WHERE datname = '${PROJECT_NAME}_${WORKTREE_NAME}'" | \
-#     grep -q 1 || \
-#     PGPASSWORD=dev createdb -h "postgres-${PROJECT_NAME}" -U dev "${PROJECT_NAME}_${WORKTREE_NAME}"
-
-# --- Migrations ---
-# Examples:
-#   pnpm migrate
-#   rails db:migrate
-
-# --- Dev server ---
-# Note: If you start a long-running process here, it blocks the hook.
-# Use background processes or a process manager instead.
-# Examples:
-#   nohup pnpm dev > /tmp/dev-server.log 2>&1 &
-
-echo "=== devcontainer-wt: worktree '${WORKTREE_NAME}' ready ==="
 ```
 
 ## Worktree Hooks
@@ -700,37 +632,31 @@ gitdir: /Users/you/projects/myapp/.git/worktrees/feature-x
 
 In a normal devcontainer (no worktrees), `.git` is a **directory** that gets mounted alongside the project — git works fine. But with a worktree, the `.git` file's host path doesn't exist inside the container.
 
-### The Solution (Symlink Approach)
+### The Solution (Same-Path Volume Mount)
 
-Instead of rewriting the `.git` file (which would mutate the bind-mounted file and break host-side git), the template creates a symlink inside the container:
+The template mounts the git common directory at the same absolute host path inside the container, so the `.git` file's host path references resolve directly:
 
-1. **`init.sh` (host-side):** Resolves the main repo's `.git` directory path and writes it to `.env`.
+1. **`init.sh` (host-side):** Resolves the main repo's `.git` directory path and writes it to `.env` as `GIT_COMMON_DIR`.
 
-2. **`docker-compose.yml`:** Mounts the git common directory at a predictable container path:
+2. **`docker-compose.yml`:** Mounts the git common directory at the same absolute path:
    ```
-   Host: ~/projects/myapp/.git/  →  Container: /workspaces/myapp/.git/
+   Host: /Users/you/projects/myapp/.git/  →  Container: /Users/you/projects/myapp/.git/
    ```
 
-3. **`post-start.sh` (container-side):** Reads the host path from the `.git` file and creates a symlink so it resolves:
+3. **Git resolves directly:** The `.git` file's host path now exists inside the container at the exact same path:
    ```
    .git file says:  gitdir: /Users/you/projects/myapp/.git/worktrees/feature-x
-   Symlink created: /Users/you/projects/myapp/.git → /workspaces/myapp/.git
-   Git follows:     /Users/you/projects/myapp/.git/worktrees/feature-x
-                    → (via symlink) /workspaces/myapp/.git/worktrees/feature-x ✓
+   Container has:   /Users/you/projects/myapp/.git/worktrees/feature-x  ✓
    ```
 
-4. **`commondir` (no change needed):** Inside `.git/worktrees/feature-x/commondir`, the relative path `../..` still resolves correctly to the git common directory regardless of where it's mounted.
+4. **`commondir` (no change needed):** Inside `.git/worktrees/feature-x/commondir`, the relative path `../..` still resolves correctly to the git common directory.
 
-### Why Symlink Instead of File Rewrite
+### Why Same-Path Mount
 
-The original approach used `sed` to rewrite the `.git` file inside the container. But since the file is bind-mounted, this modifies the host's `.git` file too — breaking host-side git operations. The symlink approach:
-
+- **No post-start script needed.** Git works immediately when the container starts.
 - **Never modifies any files.** The host's `.git` file stays untouched.
-- **No restoration needed.** No init.sh logic to restore the `.git` file on each start.
-- **Idempotent.** `ln -sfn` can be run on every start safely.
 - **Transparent to all git tools.** Path resolution happens at the filesystem level.
-
-The only cosmetic side effect: it creates a host-path directory structure inside the container (e.g., `/Users/you/projects/myapp/.git`). This is harmless.
+- **Simpler architecture.** No symlink creation, no sudo, no verification step.
 
 ### Git Concurrency with Parallel Agents
 
@@ -959,5 +885,5 @@ docker exec "postgres-${PROJECT_NAME}" dropdb -U dev --if-exists "${PROJECT_NAME
 
 - **Compose V2 `.env` location.** Docker Compose V2 reads `.env` from the compose file's directory. Need to verify this works consistently when devcontainer CLI invokes compose.
 - **Hot reload.** File watchers inside containers may need tuning (e.g. `inotify` limits on Linux, polling on macOS via Docker Desktop). This is a general devcontainer concern, not specific to worktrees.
-- **Git worktree back-pointer.** The `.git/worktrees/{name}/gitdir` file still contains the host path after the symlink fix. This only affects `git worktree list` inside the container. If this becomes a problem, the post-start.sh script can rewrite it too, but it modifies a shared git metadata file (visible to the host and other containers).
+- **Git worktree back-pointer.** The `.git/worktrees/{name}/gitdir` file contains the host path to the worktree. Since we mount the git common directory at the same host path, this resolves correctly inside the container.
 - **`envsubst` availability.** The `init.sh` script uses `envsubst` to expand `.env.app.template`. This is available on most Linux systems (part of `gettext`) and on macOS via Homebrew. Need to verify availability or provide a fallback.

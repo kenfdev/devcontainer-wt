@@ -120,12 +120,11 @@ fi
 # --- Install core files ---
 
 info "Installing .devcontainer/..."
-mkdir -p .devcontainer/hooks
+mkdir -p .devcontainer
 
 cp "$TEMPLATE_DIR/.devcontainer/devcontainer.json.template" .devcontainer/
 cp .devcontainer/devcontainer.json.template .devcontainer/devcontainer.json
 cp "$TEMPLATE_DIR/.devcontainer/Dockerfile"                 .devcontainer/
-cp "$TEMPLATE_DIR/.devcontainer/hooks/post-start.sh"        .devcontainer/hooks/
 cp "$TEMPLATE_DIR/.devcontainer/docker-compose.local.yml.template" .devcontainer/
 
 if [ "$MODE" = "minimum" ]; then
@@ -137,7 +136,6 @@ else
 fi
 
 chmod +x .devcontainer/init.sh
-chmod +x .devcontainer/hooks/post-start.sh
 
 info "Installing .env.app.template..."
 cp "$TEMPLATE_DIR/.env.app.template" .
@@ -218,11 +216,9 @@ if [ "$MODE" = "full" ]; then
   info "  3. docker compose up -d                   -- start shared infrastructure"
   info "  4. Edit docker-compose.yml                -- add infra (Postgres, Redis, etc.)"
   info "  5. Edit .env.app.template                 -- add per-worktree env vars"
-  info "  6. Edit .devcontainer/hooks/post-start.sh -- add project setup (deps, DB, migrations)"
-  info "  7. Open in VS Code and 'Reopen in Container'"
+  info "  6. Open in VS Code and 'Reopen in Container'"
 else
-  info "  3. Edit .devcontainer/hooks/post-start.sh -- add project setup (deps, build steps)"
-  info "  4. Open in VS Code and 'Reopen in Container'"
+  info "  3. Open in VS Code and 'Reopen in Container'"
   echo
   info "To upgrade to full mode (Traefik, shared infra, custom network):"
   info "  Re-run the installer without --minimum"

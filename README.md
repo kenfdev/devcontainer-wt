@@ -4,7 +4,7 @@ Seamless devcontainer + git worktree workflows. Run multiple feature branches si
 
 ## What You Get
 
-- **Git works inside containers** -- worktree `.git` file resolution is fixed automatically via symlink (no file mutation).
+- **Git works inside containers** -- worktree `.git` file resolution is fixed automatically via volume mount (no file mutation).
 - **No port conflicts** -- Traefik routes by subdomain, so every worktree container can listen on the same internal port.
 - **Per-worktree database** -- each worktree gets its own database, created automatically on startup.
 - **Per-worktree env vars** -- `.env.app.template` is expanded per worktree with `${WORKTREE_NAME}`, `${BRANCH_NAME}`, `${PROJECT_NAME}`, etc.
@@ -91,9 +91,6 @@ myapp/                              # <-- you are here (main worktree)
     docker-compose.infra.yml        # shared infra (Traefik, Postgres) -- profiles-gated
     Dockerfile                      # container image
     init.sh                         # host-side init script
-    hooks/
-      post-start.sh                 # in-container setup script
-      on-remove.sh                  # cleanup hook for worktree removal
     .env                            # generated (gitignored)
     .env.app                        # generated (gitignored)
   .env.app.template                 # per-worktree env var template (tracked)
@@ -144,9 +141,7 @@ Click **"Reopen in Container"** (or run the command palette: `Dev Containers: Re
    - Any infrastructure services you've added (Postgres, Redis, etc.).
    - `app-{PROJECT_NAME}-{WORKTREE_NAME}` -- your app container.
 
-3. **`post-start.sh` runs inside the container** (via `postStartCommand`):
-   - Applies the git worktree symlink fix (for worktree containers).
-   - Runs your project setup (dependency installation, DB init, migrations, dev server -- see [CUSTOMIZING.md](CUSTOMIZING.md)).
+3. **Git works immediately** -- the git common directory is mounted at the same absolute host path, so `.git` file references resolve directly inside the container.
 
 ### Verify It Works
 
@@ -164,7 +159,7 @@ Then open your browser. Assuming you cloned into `myapp/`:
 | http://main.myapp.localhost | Your app (main worktree) |
 | http://traefik.myapp.localhost | Traefik dashboard (shows all routes) |
 
-If you've set up a dev server in `post-start.sh`, your app should be reachable. The sample app shows project/worktree info.
+Your app should be reachable if you've set up a dev server. The sample app shows project/worktree info.
 
 > **Note (macOS):** `*.localhost` resolves to `127.0.0.1` out of the box. No `/etc/hosts` changes needed.
 >
@@ -206,9 +201,7 @@ Click **"Reopen in Container"** again.
 
 2. **Only the app container starts**: `app-myapp-myapp-feature-x`.
 
-3. **`post-start.sh` runs inside the container**:
-   - **Creates a symlink** so the host path in `.git` resolves inside the container. This is the key worktree fix -- git commands (`log`, `blame`, `status`, `commit`) now work.
-   - Runs your project setup (same as the main worktree).
+3. **Git works immediately** -- the git common directory is mounted at the same absolute host path, so the `.git` file's host path references resolve directly. Git commands (`log`, `blame`, `status`, `commit`) work out of the box.
 
 ### Verify the Feature Worktree
 
@@ -376,17 +369,17 @@ gitdir: /Users/you/myapp/.git/worktrees/feature-x
 
 When mounted into a container at `/workspaces/myapp-feature-x`, this host path doesn't exist. All git commands fail.
 
-### The Symlink Fix
+### The Volume Mount Fix
 
-Instead of rewriting the `.git` file (which would mutate the bind-mounted file and break host-side git), `post-start.sh` creates a symlink:
+Instead of rewriting the `.git` file (which would mutate the bind-mounted file and break host-side git), `docker-compose.yml` mounts the git common directory at the same absolute host path inside the container:
 
 ```
-/Users/you/myapp/.git  -->  /workspaces/myapp/.git  (symlink)
+Host: /Users/you/myapp/.git/  →  Container: /Users/you/myapp/.git/  (same path)
 ```
 
-Now when git reads the `.git` file and follows `/Users/you/myapp/.git/worktrees/feature-x`, the symlink transparently redirects it to `/workspaces/myapp/.git/worktrees/feature-x`, which exists because `docker-compose.yml` mounts the git common directory there.
+When git reads the `.git` file and follows `/Users/you/myapp/.git/worktrees/feature-x`, the path exists inside the container because the volume mount places the git directory at the exact same path.
 
-The `.git` file is **never modified**. The host is unaffected.
+The `.git` file is **never modified**. No symlink or post-start script needed. The host is unaffected.
 
 ### Infrastructure Isolation
 
@@ -461,13 +454,13 @@ docker ps
 
 ### Git commands fail inside a worktree container
 
-Check if the symlink was created:
+Check if the git common directory is mounted at the correct path:
 ```bash
 # Inside the container
 ls -la /Users/  # should see your host path structure
 ```
 
-Check `post-start.sh` output in the VS Code terminal panel.
+Check that the git common directory volume mount is correct in `.devcontainer/.env`.
 
 ### Database connection refused
 

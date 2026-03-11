@@ -10,8 +10,7 @@ Every file in the template falls into one of two categories:
 |---|---|---|
 | `.devcontainer/init.sh` | **DO NOT EDIT** | Template engine. Detects worktree context, generates `.env` files. |
 | `.devcontainer/docker-compose.yml` (core sections) | **DO NOT EDIT** | Template engine. Volume mounts, labels, environment, networking. Exception: change the `loadbalancer.server.port` if your app doesn't use port 3000. |
-| `.devcontainer/hooks/post-start.sh` (git symlink fix) | **DO NOT EDIT** | Template engine. The `if [ -f ".git" ]` block that creates the symlink. |
-| `.devcontainer/devcontainer.json` (core fields) | **DO NOT EDIT** | Template engine. `name`, `dockerComposeFile`, `service`, `workspaceFolder`, `initializeCommand`, `postStartCommand`, `remoteEnv`. |
+| `.devcontainer/devcontainer.json` (core fields) | **DO NOT EDIT** | Template engine. `name`, `dockerComposeFile`, `service`, `workspaceFolder`, `initializeCommand`, `remoteEnv`. |
 | `.worktree/hooks/on-create.sh` | **DO NOT EDIT** | Copies gitignored files from `.worktreeinclude` to new worktrees. |
 | `.worktree/hooks/on-delete.sh` (core sections) | **DO NOT EDIT** | Container stop + orphan pruning. Exception: add project-specific cleanup in the CUSTOMIZE section. |
 | | | |
@@ -19,7 +18,6 @@ Every file in the template falls into one of two categories:
 | `.devcontainer/devcontainer.json` (features, extensions) | **CUSTOMIZE** | Add devcontainer features (Node, Python, Go, etc.) and VS Code extensions. |
 | `docker-compose.yml` (project root) | **CUSTOMIZE** | Add infrastructure services (Postgres, Redis, etc.). |
 | `.devcontainer/docker-compose.yml` (port, caches) | **CUSTOMIZE** | Change the app port. Add shared build cache volumes. |
-| `.devcontainer/hooks/post-start.sh` (project setup) | **CUSTOMIZE** | Add dependency installation, DB initialization, migrations. |
 | `.worktree/hooks/on-delete.sh` (cleanup section) | **CUSTOMIZE** | Cleanup hook for worktree removal. Drop databases, clear caches. |
 | `.env.app.template` | **CUSTOMIZE** | Define per-worktree environment variables using `${VARIABLE}` placeholders. |
 | `.gitignore` | **CUSTOMIZE** | Add your project's ignore patterns. Keep the existing devcontainer-wt entries. |
@@ -118,22 +116,18 @@ APP_NAME=${PROJECT_NAME}-${WORKTREE_NAME}
 SECRET_KEY=${SECRET_KEY}
 ```
 
-### 6. Set up post-start hooks
+### 6. Set up project lifecycle hooks (optional)
 
-Edit `.devcontainer/hooks/post-start.sh` below the `CUSTOMIZE` marker. Add your dependency installation and database setup:
+If your project needs setup steps that run inside the container (dependency installation, DB initialization, migrations), add a `postStartCommand` to `.devcontainer/devcontainer.json`:
 
-```bash
-# --- Install dependencies ---
-npm install
+```jsonc
+"postStartCommand": "npm install && npx prisma migrate deploy"
+```
 
-# --- Database initialization ---
-PGPASSWORD=dev psql -h "postgres-${PROJECT_NAME}" -U dev -tc \
-  "SELECT 1 FROM pg_database WHERE datname = '${PROJECT_NAME}_${WORKTREE_NAME}'" | \
-  grep -q 1 || \
-  PGPASSWORD=dev createdb -h "postgres-${PROJECT_NAME}" -U dev "${PROJECT_NAME}_${WORKTREE_NAME}"
+For complex setup, create a script and reference it:
 
-# --- Migrations ---
-npx prisma migrate deploy
+```jsonc
+"postStartCommand": ".devcontainer/setup.sh"
 ```
 
 ### 7. Set up cleanup hooks
@@ -239,7 +233,6 @@ devcontainer.json features:     Add runtime (Go, Rust, Python, etc.)
 docker-compose.yml (root):      Not installed (no infra needed)
 .devcontainer/docker-compose.yml: No Traefik labels, no network
 .env.app.template:              Minimal or empty
-post-start.sh:                  Dependency install, build steps
 ```
 
 ### Python + PostgreSQL project
@@ -249,7 +242,6 @@ Dockerfile:     Add postgresql-client
 devcontainer.json features:  python:3.12
 docker-compose.yml (root):  Uncomment postgres
 .env.app.template:          DATABASE_URL=postgres://...
-post-start.sh:              pip install -r requirements.txt + createdb + alembic upgrade head
 docker-compose.yml port:    Change to 8000
 ```
 
@@ -260,7 +252,6 @@ Dockerfile:     Add redis-tools (optional, for debugging)
 devcontainer.json features:  go:1.22
 docker-compose.yml (root):  Uncomment redis
 .env.app.template:          REDIS_URL=redis://...
-post-start.sh:              go mod download
 ```
 
 ### Multi-service project (frontend + API, separate containers)
@@ -321,7 +312,7 @@ services:
     container_name: "app-${PROJECT_NAME}-${WORKTREE_NAME}"
     volumes:
       - ${LOCAL_WORKSPACE_FOLDER}:/workspaces/${WORKTREE_NAME}:cached
-      - ${GIT_COMMON_DIR}:/workspaces/${MAIN_REPO_NAME}/.git:rw
+      - ${GIT_COMMON_DIR}:${GIT_COMMON_DIR}:cached
     labels:
       - "traefik.enable=true"
       # UI app (port 3000)
@@ -352,7 +343,7 @@ services:
       - devnet
 ```
 
-**`post-start.sh`** — start the monorepo dev server after the git fix:
+**`postStartCommand`** — start the monorepo dev server:
 
 ```bash
 # --- Dev server (Turborepo) ---

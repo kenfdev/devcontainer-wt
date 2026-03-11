@@ -51,7 +51,7 @@ Docker Network: devnet-{PROJECT}
 1. **`docker compose up -d`** (host, project root): Start shared infrastructure (Traefik, DB, etc.) independently.
 2. **`init.sh`** (host, `initializeCommand`): Detects worktree context, writes `.env`, expands `.env.app.template`.
 3. **Docker Compose** brings up the app container using `.env` for variable substitution.
-4. **`post-start.sh`** (container, `postStartCommand`): Creates git symlink fix, then runs project setup (deps, DB init, migrations).
+4. **Git works immediately** — the git common directory is mounted at the same absolute host path, so `.git` file references resolve directly.
 
 ## File Classification
 
@@ -62,9 +62,8 @@ These files contain the core devcontainer-wt machinery. Modifying them will brea
 | File | Purpose |
 |---|---|
 | `.devcontainer/init.sh` | Host-side worktree detection, `.env` generation |
-| `.devcontainer/hooks/post-start.sh` (git symlink block) | The `if [ -f ".git" ]` section that fixes git inside worktree containers |
 | `.devcontainer/docker-compose.yml` (volumes, labels, env, networks) | Core volume mounts, Traefik labels, devcontainer-wt metadata labels, networking |
-| `.devcontainer/devcontainer.json` (core fields) | `name`, `dockerComposeFile`, `service`, `workspaceFolder`, `initializeCommand`, `postStartCommand`, `remoteEnv` |
+| `.devcontainer/devcontainer.json` (core fields) | `name`, `dockerComposeFile`, `service`, `workspaceFolder`, `initializeCommand`, `remoteEnv` |
 
 ### CUSTOMIZE — User-Editable Files
 
@@ -76,7 +75,6 @@ These files are meant to be adapted for each project.
 | `.devcontainer/devcontainer.json` | `features` (language runtimes), `customizations.vscode.extensions` |
 | `docker-compose.yml` (project root) | Shared infrastructure: Traefik, Postgres, Redis, etc. |
 | `.devcontainer/docker-compose.yml` | Change `loadbalancer.server.port` (default 3000), add shared cache volumes |
-| `.devcontainer/hooks/post-start.sh` | Project setup below the `CUSTOMIZE` marker: deps, DB init, migrations |
 | `.worktree/hooks/on-delete.sh` | Cleanup hook for worktree removal: drop DB, clear caches. |
 | `.env.app.template` | Per-worktree environment variables with `${VARIABLE}` placeholders |
 
@@ -89,10 +87,9 @@ When setting up devcontainer-wt in a new project:
 3. Add system dependencies in `Dockerfile` if needed.
 4. Add infrastructure services in `docker-compose.yml` (project root).
 5. Configure `.env.app.template` with project-specific variables.
-6. Edit `post-start.sh` below the `CUSTOMIZE` marker for deps, DB init, migrations.
-7. Update the Traefik port in `.devcontainer/docker-compose.yml` if the app doesn't use port 3000.
-8. Add VS Code extensions in `devcontainer.json`.
-9. Configure worktree hooks: `git config --add wt.hook ".worktree/hooks/on-create.sh"`
+6. Update the Traefik port in `.devcontainer/docker-compose.yml` if the app doesn't use port 3000.
+7. Add VS Code extensions in `devcontainer.json`.
+8. Configure worktree hooks: `git config --add wt.hook ".worktree/hooks/on-create.sh"`
 
 See [references/CUSTOMIZING.md](references/CUSTOMIZING.md) for detailed instructions and examples.
 
@@ -123,7 +120,7 @@ To add a new shared service (e.g., Redis):
 
 ## Per-Worktree Database Setup
 
-In `post-start.sh` (below the CUSTOMIZE marker), add idempotent DB creation:
+To set up per-worktree databases, add idempotent DB creation to your `postStartCommand` or a custom setup script:
 
 ```bash
 # PostgreSQL example
@@ -137,7 +134,7 @@ The database name pattern is `{PROJECT_NAME}_{WORKTREE_NAME}`.
 
 ## Available Variables
 
-These variables are available in `post-start.sh`, `.env.app.template`, and as container environment variables:
+These variables are available in `.env.app.template` and as container environment variables:
 
 | Variable | Example | Source |
 |---|---|---|
@@ -179,7 +176,7 @@ cd ../myapp-feature-x && .worktree/hooks/on-delete.sh
 
 ## Troubleshooting
 
-- **Git fails inside container:** Check that `post-start.sh` ran. Look for `[devcontainer-wt] Git symlink fix applied` in the terminal.
+- **Git fails inside container:** Check that the git common directory volume mount is correct. Verify `GIT_COMMON_DIR` in `.devcontainer/.env` points to the right path.
 - **App not reachable:** Check `cat .devcontainer/.env` for `PROJECT_NAME` and `WORKTREE_NAME`. Verify Traefik is running: `docker ps | grep traefik`.
 - **DB connection refused:** Infrastructure must be started first: `docker compose up -d` from project root.
 - **Port 80 in use:** Set `TRAEFIK_PORT` before starting infra: `TRAEFIK_PORT=8000 docker compose up -d`.

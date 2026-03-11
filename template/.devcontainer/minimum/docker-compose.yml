@@ -27,8 +27,9 @@ services:
     volumes:
       # Mount the worktree at the conventional /workspaces path
       - ${LOCAL_WORKSPACE_FOLDER}:/workspaces/${WORKTREE_NAME}:cached
-      # Mount the git common directory so the symlink target exists
-      - ${GIT_COMMON_DIR}:/workspaces/${MAIN_REPO_NAME}/.git:rw
+      # Mount the git common directory at the same absolute host path so
+      # .git file references (absolute paths) remain valid inside the container
+      - ${GIT_COMMON_DIR}:${GIT_COMMON_DIR}:cached
 
     # -------------------------------------------------------------------------
     # DO NOT EDIT — devcontainer-wt metadata labels (used by orphan detection)
