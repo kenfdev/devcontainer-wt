@@ -110,10 +110,10 @@ if ! curl -fsSL "https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz"
   error "Failed to download template. Check your network connection."
   exit 1
 fi
-TEMPLATE_DIR="${TMPDIR}/devcontainer-wt-${BRANCH}"
+TEMPLATE_DIR="${TMPDIR}/devcontainer-wt-${BRANCH}/template"
 
 if [ ! -d "$TEMPLATE_DIR" ]; then
-  error "Unexpected archive structure. Expected directory: devcontainer-wt-${BRANCH}"
+  error "Unexpected archive structure. Expected directory: devcontainer-wt-${BRANCH}/template"
   exit 1
 fi
 
@@ -124,33 +124,40 @@ mkdir -p .devcontainer/hooks
 
 cp "$TEMPLATE_DIR/.devcontainer/devcontainer.json.template" .devcontainer/
 cp .devcontainer/devcontainer.json.template .devcontainer/devcontainer.json
-cp "$TEMPLATE_DIR/.devcontainer/Dockerfile"               .devcontainer/
-cp "$TEMPLATE_DIR/.devcontainer/hooks/post-start.sh"      .devcontainer/hooks/
-cp "$TEMPLATE_DIR/.devcontainer/hooks/on-remove.sh"       .devcontainer/hooks/
+cp "$TEMPLATE_DIR/.devcontainer/Dockerfile"                 .devcontainer/
+cp "$TEMPLATE_DIR/.devcontainer/hooks/post-start.sh"        .devcontainer/hooks/
+cp "$TEMPLATE_DIR/.devcontainer/docker-compose.local.yml.template" .devcontainer/
 
 if [ "$MODE" = "minimum" ]; then
-  cp "$TEMPLATE_DIR/.devcontainer/minimum/init.sh"                  .devcontainer/
-  cp "$TEMPLATE_DIR/.devcontainer/minimum/docker-compose.yml"       .devcontainer/
-  cp "$TEMPLATE_DIR/.devcontainer/minimum/docker-compose.infra.yml" .devcontainer/
+  cp "$TEMPLATE_DIR/.devcontainer/minimum/init.sh"            .devcontainer/
+  cp "$TEMPLATE_DIR/.devcontainer/minimum/docker-compose.yml" .devcontainer/
 else
-  cp "$TEMPLATE_DIR/.devcontainer/init.sh"                  .devcontainer/
-  cp "$TEMPLATE_DIR/.devcontainer/docker-compose.yml"       .devcontainer/
-  cp "$TEMPLATE_DIR/.devcontainer/docker-compose.infra.yml" .devcontainer/
+  cp "$TEMPLATE_DIR/.devcontainer/init.sh"            .devcontainer/
+  cp "$TEMPLATE_DIR/.devcontainer/docker-compose.yml" .devcontainer/
 fi
 
 chmod +x .devcontainer/init.sh
 chmod +x .devcontainer/hooks/post-start.sh
-chmod +x .devcontainer/hooks/on-remove.sh
 
 info "Installing .env.app.template..."
 cp "$TEMPLATE_DIR/.env.app.template" .
 
-info "Installing worktree.sh..."
-cp "$TEMPLATE_DIR/worktree.sh" .
-chmod +x worktree.sh
-
 info "Installing .worktreeinclude..."
 cp "$TEMPLATE_DIR/.worktreeinclude" .
+
+# Install worktree hooks
+info "Installing .worktree/hooks/..."
+mkdir -p .worktree/hooks
+cp "$TEMPLATE_DIR/.worktree/hooks/on-create.sh" .worktree/hooks/
+cp "$TEMPLATE_DIR/.worktree/hooks/on-delete.sh" .worktree/hooks/
+chmod +x .worktree/hooks/on-create.sh
+chmod +x .worktree/hooks/on-delete.sh
+
+# Install root docker-compose.yml for full mode
+if [ "$MODE" = "full" ]; then
+  info "Installing docker-compose.yml (shared infrastructure)..."
+  cp "$TEMPLATE_DIR/docker-compose.yml" .
+fi
 
 # Create .devcontainer/.gitignore for generated files
 cat > .devcontainer/.gitignore <<'GITIGNORE'
@@ -208,10 +215,11 @@ info "${BOLD}Next steps:${NC}"
 info "  1. Edit .devcontainer/devcontainer.json  -- add language features & extensions"
 info "  2. Edit .devcontainer/Dockerfile          -- add system dependencies"
 if [ "$MODE" = "full" ]; then
-  info "  3. Edit .devcontainer/docker-compose.infra.yml -- add infra (Postgres, Redis, etc.)"
-  info "  4. Edit .env.app.template                 -- add per-worktree env vars"
-  info "  5. Edit .devcontainer/hooks/post-start.sh -- add project setup (deps, DB, migrations)"
-  info "  6. Open in VS Code and 'Reopen in Container'"
+  info "  3. docker compose up -d                   -- start shared infrastructure"
+  info "  4. Edit docker-compose.yml                -- add infra (Postgres, Redis, etc.)"
+  info "  5. Edit .env.app.template                 -- add per-worktree env vars"
+  info "  6. Edit .devcontainer/hooks/post-start.sh -- add project setup (deps, DB, migrations)"
+  info "  7. Open in VS Code and 'Reopen in Container'"
 else
   info "  3. Edit .devcontainer/hooks/post-start.sh -- add project setup (deps, build steps)"
   info "  4. Open in VS Code and 'Reopen in Container'"
@@ -220,6 +228,10 @@ else
   info "  Re-run the installer without --minimum"
 fi
 echo
+info "Configure worktree hooks (recommended):"
+info "  git config --add wt.hook \".worktree/hooks/on-create.sh\""
+info "  git config --add wt.deletehook \".worktree/hooks/on-delete.sh\""
+echo
 info "Customization guide:"
-info "  https://github.com/${REPO}/blob/${BRANCH}/.agents/skills/devcontainer-wt/references/CUSTOMIZING.md"
+info "  https://github.com/${REPO}/blob/${BRANCH}/template/.agents/skills/devcontainer-wt/references/CUSTOMIZING.md"
 echo
