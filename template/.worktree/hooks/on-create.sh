@@ -20,6 +20,46 @@ esac
 GIT_COMMON_DIR=$(cd "$gitdir" && pwd)
 MAIN_REPO_DIR=$(dirname "$GIT_COMMON_DIR")
 
+# --- Exclusion patterns ---
+# Files matching any of these patterns are never copied, even if matched by
+# .worktreeinclude globs. Add your own project-specific exclusions here.
+
+EXCLUDE_PATTERNS=(
+  # Version control
+  '.git'
+  '.git/*'
+  # JavaScript / Node
+  'node_modules'
+  'node_modules/*'
+  '.next/*'
+  '.nuxt/*'
+  # Python
+  '__pycache__'
+  '__pycache__/*'
+  '.venv/*'
+  'venv/*'
+  '*.pyc'
+  # Build artifacts
+  'dist/*'
+  'build/*'
+  '.cache/*'
+  # OS files
+  '.DS_Store'
+  'Thumbs.db'
+)
+
+_is_excluded() {
+  local filepath="$1"
+  for pattern in "${EXCLUDE_PATTERNS[@]}"; do
+    # shellcheck disable=SC2254
+    case "$filepath" in
+      $pattern) return 0 ;;
+      */$pattern) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # --- Copy .worktreeinclude files ---
 
 copy_from_include_file() {
@@ -34,6 +74,7 @@ copy_from_include_file() {
       shopt -s globstar 2>/dev/null || true
       for f in $line; do
         [[ -f "$f" ]] || continue
+        _is_excluded "$f" && continue
         mkdir -p "${target_root}/$(dirname "$f")"
         cp "$f" "${target_root}/${f}"
         echo "[devcontainer-wt] Copied: ${f}"
