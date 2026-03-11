@@ -8,7 +8,7 @@
 # Patterns are expanded using bash globbing relative to the repo root.
 
 # Per-worktree local compose overrides (personal volume mounts, etc.)
-.devcontainer/*.local.*
+.devcontainer/docker-compose.local.yml
 
 # Per-developer devcontainer config (copied from template)
 .devcontainer/devcontainer.json

@@ -1,0 +1,9 @@
+# docker-compose.local.yml.template
+# Copy this to docker-compose.local.yml and customize.
+# This file is gitignored — your overrides stay local.
+
+# Example: mount a local directory into the container
+# services:
+#   app:
+#     volumes:
+#       - /path/to/my/local/data:/workspaces/data:cached

@@ -8,20 +8,20 @@ Every file in the template falls into one of two categories:
 
 | File | Category | What to do |
 |---|---|---|
-| `.devcontainer/init.sh` | **DO NOT EDIT** | Template engine. Detects worktree context, generates `.env` files, creates Docker network. |
+| `.devcontainer/init.sh` | **DO NOT EDIT** | Template engine. Detects worktree context, generates `.env` files. |
 | `.devcontainer/docker-compose.yml` (core sections) | **DO NOT EDIT** | Template engine. Volume mounts, labels, environment, networking. Exception: change the `loadbalancer.server.port` if your app doesn't use port 3000. |
-| `.devcontainer/docker-compose.infra.yml` (traefik + networks) | **DO NOT EDIT** | Template engine. Traefik reverse proxy and network definition. |
 | `.devcontainer/hooks/post-start.sh` (git symlink fix) | **DO NOT EDIT** | Template engine. The `if [ -f ".git" ]` block that creates the symlink. |
 | `.devcontainer/devcontainer.json` (core fields) | **DO NOT EDIT** | Template engine. `name`, `dockerComposeFile`, `service`, `workspaceFolder`, `initializeCommand`, `postStartCommand`, `remoteEnv`. |
+| `.worktree/hooks/on-create.sh` | **DO NOT EDIT** | Copies gitignored files from `.worktreeinclude` to new worktrees. |
+| `.worktree/hooks/on-delete.sh` (core sections) | **DO NOT EDIT** | Container stop + orphan pruning. Exception: add project-specific cleanup in the CUSTOMIZE section. |
 | | | |
 | `.devcontainer/Dockerfile` | **CUSTOMIZE** | Add your project's system-level dependencies. |
 | `.devcontainer/devcontainer.json` (features, extensions) | **CUSTOMIZE** | Add devcontainer features (Node, Python, Go, etc.) and VS Code extensions. |
-| `.devcontainer/docker-compose.infra.yml` (your services) | **CUSTOMIZE** | Add infrastructure services (Postgres, Redis, etc.) with `profiles: [infra]`. |
+| `docker-compose.yml` (project root) | **CUSTOMIZE** | Add infrastructure services (Postgres, Redis, etc.). |
 | `.devcontainer/docker-compose.yml` (port, caches) | **CUSTOMIZE** | Change the app port. Add shared build cache volumes. |
 | `.devcontainer/hooks/post-start.sh` (project setup) | **CUSTOMIZE** | Add dependency installation, DB initialization, migrations. |
-| `.devcontainer/hooks/on-remove.sh` | **CUSTOMIZE** | Cleanup hook for worktree removal. Drop databases, clear caches. |
+| `.worktree/hooks/on-delete.sh` (cleanup section) | **CUSTOMIZE** | Cleanup hook for worktree removal. Drop databases, clear caches. |
 | `.env.app.template` | **CUSTOMIZE** | Define per-worktree environment variables using `${VARIABLE}` placeholders. |
-| `worktree.sh` | **DO NOT EDIT** | Worktree lifecycle CLI. Use `./worktree.sh add`, `remove`, `list`, `prune`. |
 | `.gitignore` | **CUSTOMIZE** | Add your project's ignore patterns. Keep the existing devcontainer-wt entries. |
 
 ## Adoption Checklist
@@ -30,11 +30,13 @@ Follow these steps to adopt devcontainer-wt into your project:
 
 ### 1. Copy the template files
 
-Copy the `.devcontainer/` directory, `.env.app.template`, `.agents/skills/devcontainer-wt/`, and `.gitignore` entries into your project root.
+Copy `.devcontainer/`, `docker-compose.yml`, `.worktree/`, `.env.app.template`, `.agents/skills/devcontainer-wt/`, and `.gitignore` entries into your project root.
 
 ```bash
 # From the devcontainer-wt template repo
 cp -r .devcontainer/ /path/to/your-project/.devcontainer/
+cp docker-compose.yml /path/to/your-project/
+cp -r .worktree/ /path/to/your-project/.worktree/
 cp .env.app.template /path/to/your-project/
 cp -r .agents/ /path/to/your-project/.agents/
 # Merge .gitignore entries (don't overwrite your existing .gitignore)
@@ -77,13 +79,12 @@ RUN apt-get update && apt-get install -y \
 
 ### 4. Add infrastructure services
 
-Edit `.devcontainer/docker-compose.infra.yml` to uncomment or add services. Every service **must** have `profiles: [infra]`:
+Edit `docker-compose.yml` (project root) to uncomment or add services:
 
 ```yaml
   postgres:
-    profiles: [infra]
     image: postgres:16
-    container_name: "postgres-${PROJECT_NAME}"
+    container_name: "postgres-${PROJECT_NAME:-myapp}"
     environment:
       POSTGRES_PASSWORD: dev
       POSTGRES_USER: dev
@@ -101,8 +102,10 @@ Don't forget to add the corresponding volume:
 ```yaml
 volumes:
   pgdata:
-    name: "${PROJECT_NAME}-pgdata"
+    name: "${PROJECT_NAME:-myapp}-pgdata"
 ```
+
+Then restart infrastructure: `docker compose up -d`
 
 ### 5. Configure environment variables
 
@@ -135,7 +138,7 @@ npx prisma migrate deploy
 
 ### 7. Set up cleanup hooks
 
-Edit `.devcontainer/hooks/on-remove.sh` to add project-specific cleanup that runs when a worktree is removed (via `./worktree.sh remove` or `./worktree.sh prune`):
+Edit `.worktree/hooks/on-delete.sh` in the "PROJECT-SPECIFIC CLEANUP" section to add cleanup that runs when a worktree is removed:
 
 ```bash
 # Drop per-worktree PostgreSQL database
@@ -144,8 +147,6 @@ docker exec "postgres-${PROJECT_NAME}" dropdb -U dev --if-exists "${PROJECT_NAME
 # Drop per-worktree MySQL database
 # docker exec "mysql-${PROJECT_NAME}" mysql -u dev -pdev -e "DROP DATABASE IF EXISTS \`${PROJECT_NAME}_${WORKTREE_NAME}\`" 2>/dev/null || true
 ```
-
-Available environment variables: `WORKTREE_NAME`, `PROJECT_NAME`, `BRANCH_NAME` (may be empty for orphans).
 
 ### 8. Set the app port
 
@@ -170,7 +171,17 @@ Edit `.devcontainer/devcontainer.json`:
 }
 ```
 
-### 10. (Optional) Add shared build caches
+### 10. Configure worktree hooks
+
+Wire the hook scripts into your worktree management tool:
+
+```bash
+# git-wt (recommended)
+git config --add wt.hook ".worktree/hooks/on-create.sh"
+git config --add wt.deletehook ".worktree/hooks/on-delete.sh"
+```
+
+### 11. (Optional) Add shared build caches
 
 To share package manager caches across worktrees, uncomment and adapt the volumes section in `.devcontainer/docker-compose.yml`:
 
@@ -184,9 +195,12 @@ volumes:
     name: "${PROJECT_NAME}-npm-cache"
 ```
 
-### 11. Test it
+### 12. Test it
 
 ```bash
+# Start infrastructure
+docker compose up -d
+
 # Open in VS Code and "Reopen in Container"
 code .
 # Verify your app is reachable at http://{BRANCH}.{PROJECT}.localhost
@@ -198,73 +212,32 @@ code .
 
 For projects with no HTTP traffic (CLI tools, libraries, compilers, etc.), the core value of devcontainer-wt is the **git worktree fix** and **per-worktree isolation** — Traefik and shared infrastructure are not needed.
 
+Use the `--minimum` install mode:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kenfdev/devcontainer-wt/main/install.sh | bash -s -- --minimum
+```
+
 **What still works without infra:**
 - Git worktree fix (the primary reason to use devcontainer-wt)
 - Per-worktree containers with full isolation
 - Per-worktree env vars (via `.env.app.template`)
-- Orphan container detection
+- Worktree hooks (on-create, on-delete)
 - Parallel AI agents (one per worktree)
 
-**`docker-compose.infra.yml`** — comment out or remove the Traefik service. Keep only the network definition (required by Docker Compose):
-
-```yaml
-services:
-  # No infrastructure services needed for this project.
-
-  # ---------------------------------------------------------------------------
-  # CUSTOMIZE — Add infrastructure services below if needed later.
-  # Remember: every service needs `profiles: [infra]`.
-  # ---------------------------------------------------------------------------
-
-networks:
-  devnet:
-    name: ${NETWORK_NAME}
-```
-
-**`docker-compose.yml`** — remove the Traefik labels and `extra_hosts`. Keep the `devcontainer-wt.*` metadata labels (used by orphan detection):
-
-```yaml
-services:
-  app:
-    build:
-      context: ..
-      dockerfile: .devcontainer/Dockerfile
-    tty: true
-    container_name: "app-${PROJECT_NAME}-${WORKTREE_NAME}"
-    volumes:
-      - ${LOCAL_WORKSPACE_FOLDER}:/workspaces/${WORKTREE_NAME}:cached
-      - ${GIT_COMMON_DIR}:/workspaces/${MAIN_REPO_NAME}/.git:rw
-    labels:
-      # No Traefik labels — this project has no HTTP traffic.
-      # Orphan detection labels (keep these):
-      - "devcontainer-wt=true"
-      - "devcontainer-wt.project=${PROJECT_NAME}"
-      - "devcontainer-wt.worktree=${WORKTREE_NAME}"
-      - "devcontainer-wt.worktree-dir=${LOCAL_WORKSPACE_FOLDER}"
-    env_file:
-      - .env.app
-    environment:
-      - WORKTREE_NAME=${WORKTREE_NAME}
-      - PROJECT_NAME=${PROJECT_NAME}
-      - MAIN_REPO_NAME=${MAIN_REPO_NAME}
-    networks:
-      - devnet
-
-networks:
-  devnet:
-    external: true
-    name: ${NETWORK_NAME}
-```
-
-**No other changes needed.** `init.sh` and `post-start.sh` work as-is. The Docker network is still created (required by Compose) but carries no overhead. The `COMPOSE_PROFILES=infra` is set for the main worktree but has no effect since there are no infra services.
+**What's different in minimum mode:**
+- No root `docker-compose.yml` (no Traefik, no shared services)
+- No Docker network
+- No Traefik labels in `.devcontainer/docker-compose.yml`
+- Access your app via VS Code's automatic port forwarding instead of subdomains
 
 **Quick summary:**
 
 ```
 Dockerfile:                     Add your language/tools
 devcontainer.json features:     Add runtime (Go, Rust, Python, etc.)
-docker-compose.infra.yml:       Remove Traefik, leave network only
-docker-compose.yml:             Remove Traefik labels and extra_hosts
+docker-compose.yml (root):      Not installed (no infra needed)
+.devcontainer/docker-compose.yml: No Traefik labels, no network
 .env.app.template:              Minimal or empty
 post-start.sh:                  Dependency install, build steps
 ```
@@ -274,7 +247,7 @@ post-start.sh:                  Dependency install, build steps
 ```
 Dockerfile:     Add postgresql-client
 devcontainer.json features:  python:3.12
-docker-compose.infra.yml:   Uncomment postgres
+docker-compose.yml (root):  Uncomment postgres
 .env.app.template:          DATABASE_URL=postgres://...
 post-start.sh:              pip install -r requirements.txt + createdb + alembic upgrade head
 docker-compose.yml port:    Change to 8000
@@ -285,14 +258,14 @@ docker-compose.yml port:    Change to 8000
 ```
 Dockerfile:     Add redis-tools (optional, for debugging)
 devcontainer.json features:  go:1.22
-docker-compose.infra.yml:   Uncomment redis
+docker-compose.yml (root):  Uncomment redis
 .env.app.template:          REDIS_URL=redis://...
 post-start.sh:              go mod download
 ```
 
 ### Multi-service project (frontend + API, separate containers)
 
-Define multiple services in `docker-compose.yml` with separate Traefik routes:
+Define multiple services in `.devcontainer/docker-compose.yml` with separate Traefik routes:
 
 ```yaml
 services:

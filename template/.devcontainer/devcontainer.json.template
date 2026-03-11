@@ -8,7 +8,6 @@
   // =========================================================================
   "name": "${localWorkspaceFolderBasename}",
   "dockerComposeFile": [
-    "docker-compose.infra.yml",
     "docker-compose.yml",
     "docker-compose.local.yml"
   ],

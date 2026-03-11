@@ -1,9 +1,0 @@
-# =============================================================================
-# Minimum mode — no shared infrastructure services.
-#
-# This is an empty stub. The devcontainer.json references this file, but no
-# services are defined. To upgrade to full mode (Traefik, shared DB, etc.),
-# re-run the installer without --minimum.
-# =============================================================================
-
-services: {}
