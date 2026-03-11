@@ -228,7 +228,8 @@ else
   info "  Re-run the installer without --minimum"
 fi
 echo
-info "Configure worktree hooks (recommended):"
+info "If you are using git-wt, configure worktree hooks (recommended):"
+info "  git config wt.basedir .git/wt"
 info "  git config --add wt.hook \".worktree/hooks/on-create.sh\""
 info "  git config --add wt.deletehook \".worktree/hooks/on-delete.sh\""
 echo
