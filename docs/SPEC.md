@@ -1,6 +1,6 @@
 # devcontainer-wt
 
-A reference architecture and reusable template for seamless devcontainer + git worktree workflows.
+A thin, opinionated template for seamless devcontainer + git worktree workflows. Worktree management is delegated to external tools (e.g., [git-wt](https://github.com/k1LoW/git-wt), [wtp](https://github.com/satococoa/wtp), or raw `git worktree`). This template focuses only on what those tools can't do: making devcontainers work correctly with worktrees.
 
 ## Problem
 
@@ -12,18 +12,18 @@ Working with devcontainers and git worktrees simultaneously is painful:
 
 3. **No shared infrastructure.** Each devcontainer typically spins up its own database, cache, etc. There's no built-in way to share these across worktrees or isolate data per worktree within a shared service.
 
-4. **No orchestration.** There's no standard way to create a worktree, spin up its container, route traffic to it, initialize its database, and clean everything up when done.
+4. **Gitignored files don't propagate.** When creating a worktree, git only checks out tracked files. Gitignored files (`.env`, `docker-compose.local.yml`, IDE configs) must be manually copied.
 
 ## Solution Overview
 
-**devcontainer-wt** is a template + shell scripts approach (not a dedicated tool) that solves all four problems using existing devcontainer lifecycle hooks and Docker Compose features:
+**devcontainer-wt** is a template-only approach (no CLI wrapper) that solves these problems using existing devcontainer lifecycle hooks, Docker Compose, and external worktree management tools:
 
 - **Git fix:** Mount the git common directory at a predictable container path and create a symlink inside the container so the host path in the `.git` file resolves transparently. No file mutation — the host's `.git` file is never modified.
 - **No port conflicts:** A per-project Traefik reverse proxy routes by subdomain (`feature-x.myapp.localhost`, using the branch name). No host port mapping needed per worktree. Traefik port is configurable.
-- **Shared infrastructure:** One set of shared services (database, cache, proxy) runs from the main worktree. Per-worktree app containers join a per-project Docker network.
-- **Per-worktree isolation:** Each worktree gets its own database via user-provided hooks. Traefik routes are automatic via Docker labels. Worktree names are sanitized for DB-safe naming.
+- **Shared infrastructure:** Infrastructure services (database, cache, proxy) run from a standalone `docker-compose.yml` at the project root — started with `docker compose up` on the host, completely independent of devcontainers. Per-worktree app containers join a shared Docker network.
+- **Gitignored file propagation:** `.worktreeinclude` + `.worktreeinclude.local` define glob patterns for files to copy to new worktrees. Copying is handled by worktree tool hooks (e.g., `git-wt`'s `wt.hook`).
 - **Per-worktree env vars:** A `.env.app.template` (tracked in git) with `${VARIABLE}` placeholders is expanded by `init.sh` into `.env.app` (gitignored) per worktree. Seamless, zero-config per worktree.
-- **Lifecycle management:** `./worktree.sh` CLI for creating, removing, listing, and pruning worktrees with cleanup hooks.
+- **Lifecycle hooks:** `.worktree/hooks/on-create.sh` and `.worktree/hooks/on-delete.sh` provide extension points for worktree tool hooks (file copying, container cleanup, DB teardown).
 
 ## Target User
 
@@ -40,6 +40,7 @@ Solo developer on macOS or Linux managing multiple feature branches simultaneous
   │                                                  │
   │  myapp/  (main worktree)                         │
   │    .git/                                         │
+  │    docker-compose.yml   (infra — run on host)    │
   │    .devcontainer/                                │
   │    src/                                          │
   │                                                  │
@@ -54,34 +55,18 @@ Solo developer on macOS or Linux managing multiple feature branches simultaneous
   │    src/                                          │
   └──────────────────────────────────────────────────┘
 
-              Container Path Mapping (symlink approach)
+  Host: docker compose up (from myapp/)
   ┌──────────────────────────────────────────────────┐
-  │                                                  │
-  │  /workspaces/myapp/           (main worktree)    │
-  │    .git/                      (directory, works)  │
-  │                                                  │
-  │  /workspaces/myapp-feature-x/ (worktree)         │
-  │    .git  (unchanged — still has host path,       │
-  │           but symlink makes it resolve)           │
-  │                                                  │
-  │  /workspaces/myapp/.git/      (mounted from host)│
-  │    worktrees/feature-x/       (shared git data)  │
-  │    worktrees/pr-123/                             │
-  │                                                  │
-  │  /Users/you/myapp/.git → /workspaces/myapp/.git  │
-  │    (symlink created by post-start.sh)            │
-  └──────────────────────────────────────────────────┘
-
-              Docker Network: devnet-myapp
-  ┌──────────────────────────────────────────────────┐
-  │                                                  │
   │  ┌─────────┐  ┌──────────┐  ┌────────┐          │
   │  │ Traefik │  │ Postgres │  │ Redis  │  ...      │
   │  │ :80     │  │ :5432    │  │ :6379  │           │
   │  └────┬────┘  └──────────┘  └────────┘          │
   │       │           Shared Infrastructure          │
-  │       │         (from main worktree,             │
-  │       │          via compose profiles)           │
+  │       │     (started independently on host)      │
+  └───────┼──────────────────────────────────────────┘
+          │
+          │  Docker Network: devnet-myapp
+  ┌───────┼──────────────────────────────────────────┐
   │  ┌────┴──────────────┬──────────────────┐       │
   │  │                   │                  │        │
   │  ▼                   ▼                  ▼        │
@@ -90,7 +75,7 @@ Solo developer on macOS or Linux managing multiple feature branches simultaneous
   │ │  myapp   │  │  feature-x   │  │  pr-123  │   │
   │ │ :3000    │  │ :3000        │  │ :3000    │   │
   │ └──────────┘  └──────────────┘  └──────────┘   │
-  │  Per-worktree app containers                     │
+  │  Per-worktree app containers (devcontainers)     │
   │  (no host port mapping — Traefik routes traffic) │
   └──────────────────────────────────────────────────┘
 
@@ -109,24 +94,26 @@ Solo developer on macOS or Linux managing multiple feature branches simultaneous
 |---|---|---|
 | Git fix | Symlink inside container (no file mutation) | Creates a symlink so the host path in `.git` file resolves. The `.git` file is never modified — no host-side breakage, no restoration needed. |
 | Directory layout | Sibling directories | Most common git worktree pattern. Main worktree is a natural home for shared infra. |
+| Worktree management | External tools (git-wt, wtp, raw git worktree) | Template does NOT wrap `git worktree`. Users choose their preferred tool. Template provides hook scripts that any tool can call. |
 | Port conflict solution | Traefik with subdomain routing | Single entry point, configurable port (default 80). Auto-discovers containers via Docker labels. Zero-config per worktree. |
 | Traefik dashboard | Enabled by default | Routes to `traefik.{project}.localhost`. Invaluable for debugging routing issues. |
 | Routing pattern | Always `{branch}.{project}.localhost` | Consistent pattern using the git branch name. Main worktree gets `main.myapp.localhost`. Shorter URLs than using the worktree directory name. |
 | Container naming | Always `app-{project}-{worktree}` | Consistent pattern, no special-casing. Main worktree gets `app-myapp-myapp`. |
 | DNS | `.localhost` TLD, zero-config | Works in Chrome and macOS out of the box. Document `/etc/hosts` or `dnsmasq` workaround for Linux/Firefox. |
-| Network isolation | Per-project Docker network (`devnet-{project}`) | Prevents container name collisions and unintended cross-project access. Cross-project communication is not a supported use case. |
+| Network isolation | Per-project Docker network (`devnet-{project}`) | Prevents container name collisions and unintended cross-project access. Default name derived from PROJECT_NAME, overridable via `NETWORK_NAME` env var. |
 | Project naming | Auto-detect from main repo directory name, with override | Routes become `{branch}.{project}.localhost`. Auto-detected for zero config, overridable via `PROJECT_NAME` for custom naming. |
-| Infra lifecycle | Docker Compose profiles | Infra services (DB, cache, proxy) only start in the main worktree. Feature worktrees skip them automatically. |
+| Compose project name | `{PROJECT_NAME}-{BRANCH_NAME}` | Each worktree gets a unique Docker Compose project name for container isolation. Prevents container name collisions across worktrees. |
+| Infra lifecycle | Standalone `docker-compose.yml` at project root | Infrastructure runs independently on the host via `docker compose up`. No devcontainer required. No profiles — all defined services start. |
 | Infra restart policy | `unless-stopped` | Infra services (DB, cache, proxy) survive Docker Desktop restarts. Dev data stays up. |
 | Per-worktree env vars | `.env.app.template` expanded by `init.sh` | Tracked template with `${VARIABLE}` placeholders. `init.sh` renders it into `.env.app` (gitignored) per worktree via `envsubst`. Secrets come from host env vars or manual edits. |
 | DB per worktree | User-provided hooks with sanitized names | Template provides extension points with commented examples. DB engine is project-specific — template does not prescribe a database. |
 | Internal DNS | `extra_hosts` in compose | Ensures `*.localhost` resolves to Traefik from inside containers (needed for SSR, OAuth, webhooks). |
-| Orphan cleanup | `./worktree.sh prune` | Explicit command to find and remove orphaned containers. Runs cleanup hooks before removal. Also called automatically after `./worktree.sh remove`. |
-| Cleanup | `./worktree.sh` CLI | Zero-setup CLI at project root. `remove` runs cleanup hook, stops container, removes worktree. `prune` handles orphans. `on-remove.sh` hook for project-specific cleanup (DB, caches). |
+| Worktree hooks | `.worktree/hooks/on-create.sh` and `on-delete.sh` | Prescribed hook scripts at a well-known location. Users wire them into their worktree tool of choice (git-wt `wt.hook`/`wt.deletehook`, wtp hooks, or manual invocation). |
+| Worktreeinclude | `.worktreeinclude` + `.worktreeinclude.local` at repo root | Glob patterns for gitignored files to copy from main worktree to new worktrees. `.local` variant is personal (gitignored). Executed by `on-create.sh`. |
+| Local compose overrides | `docker-compose.local.yml` in `.devcontainer/` (gitignored) | Personal Docker Compose overrides. A `.devcontainer/docker-compose.local.yml.template` is tracked to help developers create their own. `init.sh` creates an empty stub if missing. |
 | Lifecycle hooks | Single `post-start.sh` (runs every start) | Contains git symlink fix + extension points for project setup (deps, migrations, dev server). Simpler than splitting into multiple hook files. |
 | Workspace path | Conventional `/workspaces/{name}` | Standard devcontainer path convention. Symlink approach makes this transparent. |
 | Compose variables | Resolved in init.sh, written to `.env` | `${localWorkspaceFolder}` is a devcontainer variable, NOT available in docker-compose.yml. All paths resolved in init.sh and passed via `.env`. |
-| Compose DX | Accept `--env-file` friction for manual commands | Manual `docker compose` commands on host require `--env-file .devcontainer/.env`. Documented, not abstracted. |
 | VS Code extensions | Per-container installation | Each container installs its own extensions. Sharing a volume across concurrent containers is unsafe (race conditions). Declare extensions in devcontainer.json. |
 | Git authentication | VS Code auto-forwarding + `GITHUB_TOKEN` for headless | VS Code auto-forwards SSH agent and git credentials. For CLI-only usage (devcontainer CLI, AI agents), forward `GITHUB_TOKEN` via `remoteEnv`. |
 | Git concurrency | Safe for parallel agents | Git worktrees are designed for parallel work. Per-worktree index/HEAD/working tree. Shared refs use lock files. Bind mounts preserve lock file semantics. Repo-wide operations (`gc`, `repack`) may need serialization but fail safely with lock errors. |
@@ -134,56 +121,52 @@ Solo developer on macOS or Linux managing multiple feature branches simultaneous
 | AI agent workflow | One agent per worktree | Each AI agent works in its own worktree/container. Full isolation (separate DB, deps, env). |
 | Dockerfile | Minimal + devcontainer features | Thin Dockerfile. Bare template — no devcontainer features included. Users add what they need. |
 | Resource limits | None in template | Resource management is project-specific. Docker Desktop global limits apply. |
-| Installation modes | Full (default) and minimum (`--minimum`) | Full mode includes Traefik, shared infra, custom network. Minimum mode strips Traefik, infra profiles, and custom networking for CLI/library projects that only need the git worktree fix and per-worktree isolation. |
-| Form factor | Template + shell scripts, copied per project | No external dependency. Each project gets its own copy. Simple, explicit, version controlled. Manual copy for updates. |
+| Form factor | Template files, copied per project | No external dependency. Each project gets its own copy. Simple, explicit, version controlled. Manual copy for updates. |
 | Platform | macOS + Linux | Template works on both Docker Desktop (macOS) and native Docker (Linux). |
 | Codespaces | Not supported | GitHub Codespaces has different constraints (no Traefik, no sibling worktrees). Out of scope. |
 | HTTPS | HTTP only | Keeps the template simple. Developers who need HTTPS can configure Traefik TLS themselves. |
 | Versioning | Pin major versions | `traefik:v3`, `postgres:16`, etc. Stable and predictable. Users update manually when ready. |
 | Data safety | Named Docker volumes + documentation | `docker system prune --volumes` deletes unused named volumes (general Docker behavior, not worktree-specific). Documented. |
-| Main worktree detection | `[ -d ".git" ]` check | Simple and covers standard workflows. Bare repo and submodule edge cases are out of scope. |
 | Name collision | Document, don't mitigate | Branch name sanitization may cause collisions (e.g., `feature/login` and `feature-login` both become `feature-login`). Rare enough to document rather than add complexity. |
 | File permissions | Devcontainer handles it | `remoteUser` + `updateRemoteUserUID` handle UID mapping. No template-level fix needed. |
-| Worktreeinclude | `.worktreeinclude` + `.worktreeinclude.local` at repo root | Glob patterns for gitignored files to copy from main worktree to new worktrees. `.local` variant is personal (gitignored). Runs during `worktree.sh add`. |
-| Local compose overrides | `docker-compose.local.yml` (gitignored) | Personal Docker Compose overrides (e.g., extra volume mounts). Always listed in `devcontainer.json`; `init.sh` creates an empty stub if missing. |
 
-## Prerequisite
+## Prerequisites
 
-**The main worktree must be started first.** Infrastructure services (Traefik, Postgres, Redis) run only in the main worktree's devcontainer. Feature worktree containers depend on these services being available. If you open a feature worktree before the main worktree, the app container will start but database connections and Traefik routing will fail.
+1. **Start infrastructure first.** Run `docker compose up -d` from the project root (main worktree) before opening any devcontainer. Infrastructure services (Traefik, Postgres, Redis) are independent of devcontainers and must be running for worktree containers to function.
 
-The `init.sh` script will create the Docker network if it doesn't exist, so at minimum networking will work. But infra services require the main worktree to be running.
+2. **Install a worktree management tool (recommended).** The template works with raw `git worktree` commands, but tools like [git-wt](https://github.com/k1LoW/git-wt) or [wtp](https://github.com/satococoa/wtp) provide a better experience with hook support for automatic setup and cleanup.
 
 ## Directory Structure
 
 ```
 myapp/                                   # main worktree
   .git/                                  # git database
+  docker-compose.yml                     # shared infrastructure (Traefik, DB, cache)
   .devcontainer/
     devcontainer.json                    # devcontainer configuration
     docker-compose.yml                   # per-worktree app services
-    docker-compose.infra.yml             # shared infrastructure (profiles-gated)
     docker-compose.local.yml             # personal overrides (gitignored, auto-stubbed)
+    docker-compose.local.yml.template    # template for personal overrides (tracked)
     Dockerfile                           # minimal app container image
     init.sh                              # host-side: resolves paths → .env, expands .env.app.template
     hooks/
       post-start.sh                      # in-container: git symlink fix + project setup extension points
-      on-remove.sh                       # host-side: cleanup hook for worktree removal
-    minimum/                             # minimum mode templates (used by install.sh --minimum)
-      init.sh                            # simplified init (no network, no Traefik, no profiles)
-      docker-compose.yml                 # simplified compose (no Traefik labels, no network)
-      docker-compose.infra.yml           # empty stub
     .env                                 # generated by init.sh (gitignored)
     .env.app                             # generated by init.sh from template (gitignored)
+  .worktree/
+    hooks/
+      on-create.sh                       # host-side: runs after worktree creation (copies .worktreeinclude files)
+      on-delete.sh                       # host-side: cleanup hook (stop container, drop DB, prune orphans)
   .worktreeinclude                       # glob patterns for files to copy to new worktrees (tracked)
   .worktreeinclude.local                 # personal patterns (gitignored)
   .env.app.template                      # per-worktree env var template (tracked in git)
-  worktree.sh                            # worktree lifecycle CLI (add, remove, list, prune)
   src/
   ...
 
 myapp-feature-x/                         # git worktree (sibling directory)
   .git                                   # file → ../myapp/.git/worktrees/feature-x
   .devcontainer/                         # same files (tracked in git)
+  .worktree/                             # same files (tracked in git)
   .env.app.template                      # same template (tracked in git)
   src/
   ...
@@ -191,13 +174,82 @@ myapp-feature-x/                         # git worktree (sibling directory)
 
 ## Configuration Files
 
+### `docker-compose.yml` (project root)
+
+Shared infrastructure services. Started independently on the host with `docker compose up -d`. Completely decoupled from devcontainers — no VS Code or devcontainer CLI required.
+
+```yaml
+services:
+  traefik:
+    image: traefik:v3
+    container_name: "traefik-${PROJECT_NAME:-myapp}"
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=${NETWORK_NAME:-devnet-myapp}
+      - --entrypoints.web.address=:80
+      - --api.insecure=true
+    ports:
+      - "${TRAEFIK_PORT:-80}:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${PROJECT_NAME:-myapp}.localhost`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=web"
+      - "traefik.http.services.traefik-dashboard.loadbalancer.server.port=8080"
+    networks:
+      - devnet
+    restart: unless-stopped
+
+  # Example infrastructure services.
+  # Uncomment and adapt for your project's needs.
+
+  # postgres:
+  #   image: postgres:16
+  #   container_name: "postgres-${PROJECT_NAME:-myapp}"
+  #   environment:
+  #     POSTGRES_PASSWORD: dev
+  #     POSTGRES_USER: dev
+  #   ports:
+  #     - "${POSTGRES_HOST_PORT:-15432}:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   networks:
+  #     - devnet
+  #   restart: unless-stopped
+
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: "redis-${PROJECT_NAME:-myapp}"
+  #   networks:
+  #     - devnet
+  #   restart: unless-stopped
+
+# volumes:
+#   pgdata:
+#     name: "${PROJECT_NAME:-myapp}-pgdata"
+
+networks:
+  devnet:
+    name: ${NETWORK_NAME:-devnet-myapp}
+```
+
+To start infrastructure:
+
+```bash
+cd myapp
+docker compose up -d
+# Access Traefik dashboard: http://traefik.myapp.localhost
+```
+
 ### `.devcontainer/devcontainer.json`
 
 ```jsonc
 {
   "name": "${localWorkspaceFolderBasename}",
   "dockerComposeFile": [
-    "docker-compose.infra.yml",
     "docker-compose.yml",
     "docker-compose.local.yml"
   ],
@@ -222,6 +274,7 @@ myapp-feature-x/                         # git worktree (sibling directory)
 ```
 
 Key points:
+- `dockerComposeFile` references only the app compose and local overrides. Infrastructure is managed separately.
 - `workspaceFolder` uses conventional `/workspaces/{name}` path. The git fix is handled by `post-start.sh`.
 - `initializeCommand` runs on the **host** before the container starts. Generates `.env` and `.env.app` with resolved paths.
 - `postStartCommand` runs **inside** the container on every start. Creates the git symlink and runs project setup.
@@ -230,7 +283,7 @@ Key points:
 
 ### `.devcontainer/init.sh`
 
-Runs on the **host**. Resolves git paths, detects project name, sanitizes worktree name, creates the Docker network, creates an empty `docker-compose.local.yml` stub if missing, expands the env var template, and writes `.env` for Docker Compose substitution.
+Runs on the **host**. Resolves git paths, detects project name, sanitizes worktree name, creates an empty `docker-compose.local.yml` stub if missing, expands the env var template, and writes `.env` for Docker Compose substitution.
 
 ```bash
 #!/bin/bash
@@ -259,17 +312,22 @@ GIT_COMMON_DIR=$(cd "$gitdir" && pwd)
 MAIN_REPO_NAME=$(basename "$(dirname "$GIT_COMMON_DIR")")
 PROJECT_NAME="${PROJECT_NAME:-$MAIN_REPO_NAME}"
 
-NETWORK_NAME="devnet-${PROJECT_NAME}"
+NETWORK_NAME="${NETWORK_NAME:-devnet-${PROJECT_NAME}}"
+COMPOSE_PROJECT_NAME="${PROJECT_NAME}-${BRANCH_NAME}"
 LOCAL_WORKSPACE_FOLDER="$PWD"
 
-# --- Docker network ---
+# --- Local compose overrides ---
 
-# Create per-project network if it doesn't exist (idempotent).
-docker network create "$NETWORK_NAME" 2>/dev/null || true
+# Create empty docker-compose.local.yml stub if missing (prevents Docker Compose errors).
+if [ ! -f ".devcontainer/docker-compose.local.yml" ]; then
+  echo "# Personal Docker Compose overrides (gitignored). See docker-compose.local.yml.template for examples." \
+    > .devcontainer/docker-compose.local.yml
+fi
 
 # --- Write .env for docker-compose variable substitution ---
 
 cat > .devcontainer/.env <<EOF
+COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}
 WORKTREE_NAME=${WORKTREE_NAME}
 BRANCH_NAME=${BRANCH_NAME}
 GIT_COMMON_DIR=${GIT_COMMON_DIR}
@@ -277,21 +335,14 @@ MAIN_REPO_NAME=${MAIN_REPO_NAME}
 PROJECT_NAME=${PROJECT_NAME}
 NETWORK_NAME=${NETWORK_NAME}
 LOCAL_WORKSPACE_FOLDER=${LOCAL_WORKSPACE_FOLDER}
-TRAEFIK_PORT=${TRAEFIK_PORT:-80}
 EOF
-
-# Activate infra profile only for the main worktree.
-# Main worktree has .git as a directory; worktrees have .git as a file.
-if [ -d ".git" ]; then
-  echo "COMPOSE_PROFILES=infra" >> .devcontainer/.env
-fi
 
 # --- Expand .env.app.template → .env.app ---
 
 # The .env.app.template uses ${VARIABLE} placeholders.
 # All variables from init.sh are available for substitution.
 if [ -f ".env.app.template" ]; then
-  export WORKTREE_NAME BRANCH_NAME MAIN_REPO_NAME PROJECT_NAME NETWORK_NAME
+  export WORKTREE_NAME BRANCH_NAME MAIN_REPO_NAME PROJECT_NAME NETWORK_NAME COMPOSE_PROJECT_NAME
   envsubst < .env.app.template > .devcontainer/.env.app
   echo "[devcontainer-wt] .env.app generated from template."
 else
@@ -308,7 +359,7 @@ Per-worktree environment variable template. Tracked in git. Uses `${VARIABLE}` p
 
 ```bash
 # Per-worktree environment variables.
-# Available placeholders: ${WORKTREE_NAME}, ${BRANCH_NAME}, ${PROJECT_NAME}, ${MAIN_REPO_NAME}, ${NETWORK_NAME}
+# Available placeholders: ${WORKTREE_NAME}, ${BRANCH_NAME}, ${PROJECT_NAME}, ${MAIN_REPO_NAME}, ${NETWORK_NAME}, ${COMPOSE_PROJECT_NAME}
 # Host env vars are also available (e.g., ${API_KEY} if set on host).
 
 # Examples (uncomment and adapt for your project):
@@ -319,7 +370,7 @@ Per-worktree environment variable template. Tracked in git. Uses `${VARIABLE}` p
 
 ### `.worktreeinclude` and `.worktreeinclude.local`
 
-Glob patterns (one per line) for gitignored files that should be copied from the main worktree to new worktrees during `./worktree.sh add`. Comments (`#`) and empty lines are ignored.
+Glob patterns (one per line) for gitignored files that should be copied from the main worktree to new worktrees. Comments (`#`) and empty lines are ignored.
 
 - `.worktreeinclude` — tracked in git. Shared across the team.
 - `.worktreeinclude.local` — gitignored. Personal patterns for individual developers.
@@ -327,89 +378,30 @@ Glob patterns (one per line) for gitignored files that should be copied from the
 ```bash
 # .worktreeinclude
 # Copy local compose overrides to new worktrees
-.devcontainer/*.local.*
+.devcontainer/docker-compose.local.yml
 ```
 
-When `./worktree.sh add` creates a new worktree, it expands these patterns against the main worktree directory and copies matching files to the new worktree, preserving directory structure.
+File copying is handled by `.worktree/hooks/on-create.sh`, which is invoked by the user's worktree management tool (see [Worktree Hooks](#worktree-hooks)).
 
-### `.devcontainer/docker-compose.local.yml`
+### `.devcontainer/docker-compose.local.yml` and `.devcontainer/docker-compose.local.yml.template`
 
 Personal Docker Compose overrides (gitignored). Use this for custom volume mounts, environment variables, or other per-developer customizations that shouldn't be shared with the team.
 
+A tracked template file (`.devcontainer/docker-compose.local.yml.template`) provides examples:
+
 ```yaml
+# docker-compose.local.yml.template
+# Copy this to docker-compose.local.yml and customize.
+# This file is gitignored — your overrides stay local.
+
 # Example: mount a local directory into the container
-services:
-  app:
-    volumes:
-      - /path/to/my/local/data:/workspaces/data:cached
+# services:
+#   app:
+#     volumes:
+#       - /path/to/my/local/data:/workspaces/data:cached
 ```
 
-This file is always listed in `devcontainer.json`'s `dockerComposeFile` array. If it doesn't exist, `init.sh` creates an empty stub so Docker Compose doesn't error. To propagate your local compose file to new worktrees, add `.devcontainer/*.local.*` to `.worktreeinclude` (included by default).
-
-### `.devcontainer/docker-compose.infra.yml`
-
-Shared infrastructure services. Only started in the main worktree (via `COMPOSE_PROFILES=infra`).
-
-```yaml
-services:
-  traefik:
-    profiles: [infra]
-    image: traefik:v3
-    container_name: "traefik-${PROJECT_NAME}"
-    command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=${NETWORK_NAME}
-      - --entrypoints.web.address=:80
-      - --api.insecure=true
-    ports:
-      - "${TRAEFIK_PORT}:80"
-      - "8080:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${PROJECT_NAME}.localhost`)"
-      - "traefik.http.routers.traefik-dashboard.entrypoints=web"
-      - "traefik.http.services.traefik-dashboard.loadbalancer.server.port=8080"
-    networks:
-      - devnet
-    restart: unless-stopped
-
-  # Example infrastructure services.
-  # Uncomment and adapt for your project's needs.
-
-  # postgres:
-  #   profiles: [infra]
-  #   image: postgres:16
-  #   container_name: "postgres-${PROJECT_NAME}"
-  #   environment:
-  #     POSTGRES_PASSWORD: dev
-  #     POSTGRES_USER: dev
-  #   ports:
-  #     - "${POSTGRES_HOST_PORT:-15432}:5432"
-  #   volumes:
-  #     - pgdata:/var/lib/postgresql/data
-  #   networks:
-  #     - devnet
-  #   restart: unless-stopped
-
-  # redis:
-  #   profiles: [infra]
-  #   image: redis:7-alpine
-  #   container_name: "redis-${PROJECT_NAME}"
-  #   networks:
-  #     - devnet
-  #   restart: unless-stopped
-
-# volumes:
-#   pgdata:
-#     name: "${PROJECT_NAME}-pgdata"
-
-networks:
-  devnet:
-    name: ${NETWORK_NAME}
-```
+This file is always listed in `devcontainer.json`'s `dockerComposeFile` array. If it doesn't exist, `init.sh` creates an empty stub so Docker Compose doesn't error. To propagate your local compose file to new worktrees, add `.devcontainer/docker-compose.local.yml` to `.worktreeinclude`.
 
 ### `.devcontainer/docker-compose.yml`
 
@@ -550,6 +542,149 @@ fi
 echo "=== devcontainer-wt: worktree '${WORKTREE_NAME}' ready ==="
 ```
 
+## Worktree Hooks
+
+The template provides hook scripts in `.worktree/hooks/` that handle worktree lifecycle events. These scripts are **not called automatically** — users wire them into their worktree management tool of choice.
+
+### `.worktree/hooks/on-create.sh`
+
+Runs on the **host** after a new worktree is created. Copies gitignored files listed in `.worktreeinclude`.
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+# --- Resolve main worktree ---
+
+gitdir="$(git rev-parse --git-common-dir)"
+case $gitdir in
+  /*) ;;
+  *) gitdir="$PWD/$gitdir"
+esac
+GIT_COMMON_DIR=$(cd "$gitdir" && pwd)
+MAIN_REPO_DIR=$(dirname "$GIT_COMMON_DIR")
+
+# --- Copy .worktreeinclude files ---
+
+copy_from_include_file() {
+  local include_file="$1" target_root="$2"
+  [[ -f "$include_file" ]] || return 0
+
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    (
+      cd "$MAIN_REPO_DIR"
+      shopt -s dotglob nullglob
+      shopt -s globstar 2>/dev/null || true
+      for f in $line; do
+        [[ -f "$f" ]] || continue
+        mkdir -p "${target_root}/$(dirname "$f")"
+        cp "$f" "${target_root}/${f}"
+        echo "[devcontainer-wt] Copied: ${f}"
+      done
+    )
+  done < "$include_file"
+}
+
+copy_from_include_file "${MAIN_REPO_DIR}/.worktreeinclude" "$PWD"
+copy_from_include_file "${MAIN_REPO_DIR}/.worktreeinclude.local" "$PWD"
+
+echo "[devcontainer-wt] on-create complete."
+```
+
+### `.worktree/hooks/on-delete.sh`
+
+Runs on the **host** before a worktree is removed. Stops the container and runs project-specific cleanup.
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+# --- Resolve project info ---
+
+gitdir="$(git rev-parse --git-common-dir)"
+case $gitdir in
+  /*) ;;
+  *) gitdir="$PWD/$gitdir"
+esac
+GIT_COMMON_DIR=$(cd "$gitdir" && pwd)
+MAIN_REPO_DIR=$(dirname "$GIT_COMMON_DIR")
+MAIN_REPO_NAME=$(basename "$MAIN_REPO_DIR")
+PROJECT_NAME="${PROJECT_NAME:-$MAIN_REPO_NAME}"
+
+WORKTREE_DIR_NAME=$(basename "$PWD")
+WORKTREE_NAME=$(echo "$WORKTREE_DIR_NAME" | sed 's/[^a-zA-Z0-9-]/_/g' | tr '[:upper:]' '[:lower:]')
+
+CONTAINER_NAME="app-${PROJECT_NAME}-${WORKTREE_NAME}"
+
+# --- Stop and remove container ---
+
+if docker inspect "$CONTAINER_NAME" > /dev/null 2>&1; then
+  echo "[devcontainer-wt] Removing container ${CONTAINER_NAME}..."
+  docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+fi
+
+# =============================================================================
+# PROJECT-SPECIFIC CLEANUP — customize below
+# =============================================================================
+
+# Examples:
+#   # Drop per-worktree PostgreSQL database
+#   docker exec "postgres-${PROJECT_NAME}" dropdb -U dev --if-exists "${PROJECT_NAME}_${WORKTREE_NAME}" 2>/dev/null || true
+
+# --- Prune orphaned containers ---
+
+echo "[devcontainer-wt] Checking for orphaned containers..."
+containers=$(docker ps -a --filter "label=devcontainer-wt.project=${PROJECT_NAME}" \
+  --format '{{.Names}}\t{{.Label "devcontainer-wt.worktree-dir"}}' 2>/dev/null) || true
+
+if [[ -n "$containers" ]]; then
+  while IFS=$'\t' read -r name worktree_dir; do
+    [[ -z "$name" ]] && continue
+    if [[ ! -d "$worktree_dir" ]]; then
+      echo "[devcontainer-wt] Removing orphaned container: ${name}"
+      docker rm -f "$name" 2>/dev/null || true
+    fi
+  done <<< "$containers"
+fi
+
+git worktree prune 2>/dev/null || true
+
+echo "[devcontainer-wt] on-delete complete."
+```
+
+### Wiring Hooks to Worktree Tools
+
+#### git-wt
+
+Configure hooks via `git config`:
+
+```bash
+# On worktree creation: copy .worktreeinclude files
+git config --add wt.hook ".worktree/hooks/on-create.sh"
+
+# On worktree deletion: stop container, cleanup, prune orphans
+git config --add wt.deletehook ".worktree/hooks/on-delete.sh"
+```
+
+#### wtp
+
+See [wtp documentation](https://github.com/satococoa/wtp) for hook configuration.
+
+#### Raw `git worktree`
+
+Call hooks manually:
+
+```bash
+# Create
+git worktree add ../myapp-feature-x -b feature-x
+cd ../myapp-feature-x && .worktree/hooks/on-create.sh
+
+# Delete
+cd ../myapp-feature-x && .worktree/hooks/on-delete.sh
+cd ../myapp && git worktree remove ../myapp-feature-x
+```
+
 ## How the Git Fix Works
 
 Understanding the git worktree path problem and how this template solves it:
@@ -612,7 +747,7 @@ Note: The back-pointer file (`.git/worktrees/feature-x/gitdir`) still contains t
 
 ## Multi-Service Per Worktree
 
-For projects with multiple services (frontend, backend, worker), define them all in `docker-compose.yml`:
+For projects with multiple services (frontend, backend, worker), define them all in `.devcontainer/docker-compose.yml`:
 
 ```yaml
 services:
@@ -693,32 +828,39 @@ Note: Don't share `node_modules` directories directly (they may contain platform
 git clone https://github.com/you/your-repo.git myapp
 cd myapp
 
-# 2. Open in VS Code and "Reopen in Container"
-#    This runs init.sh (detects main worktree, enables infra profile,
-#    creates devnet-myapp network) and starts Traefik + infra services
-#    + the app container.
+# 2. Start infrastructure on the host (no devcontainer needed)
+docker compose up -d
+# Traefik dashboard: http://traefik.myapp.localhost
+
+# 3. (Recommended) Configure your worktree tool
+# For git-wt:
+git config --add wt.hook ".worktree/hooks/on-create.sh"
+git config --add wt.deletehook ".worktree/hooks/on-delete.sh"
+
+# 4. Open in VS Code and "Reopen in Container"
 code .
 
-# 3. Access via browser
+# 5. Access via browser
 #    http://main.myapp.localhost (or http://main.myapp.localhost:PORT if custom TRAEFIK_PORT)
-#    http://traefik.myapp.localhost (Traefik dashboard for debugging routes)
 ```
 
 ### Create a Feature Worktree
 
 ```bash
-# 1. Create the worktree (from the main repo, on the host)
+# Using git-wt (recommended):
 cd myapp
-./worktree.sh add feature-x
+git wt feature-x
+# → creates worktree, runs on-create.sh (copies .worktreeinclude files)
 
-# 2. Open in VS Code and "Reopen in Container"
-#    init.sh detects this is a worktree (not main), skips infra profile.
-#    App container joins the existing devnet-myapp network.
-#    post-start.sh creates git symlink and runs project setup.
+# Or using raw git worktree:
+git worktree add ../myapp-feature-x -b feature-x
+cd ../myapp-feature-x && .worktree/hooks/on-create.sh
+
+# Open in VS Code and "Reopen in Container"
 code ../myapp-feature-x
 
-# 3. Access via browser
-#    http://feature-x.myapp.localhost
+# Access via browser:
+#   http://feature-x.myapp.localhost
 ```
 
 Each worktree opens as a **separate VS Code window** with its own devcontainer. This is the intended UX — clean separation between worktrees.
@@ -726,16 +868,17 @@ Each worktree opens as a **separate VS Code window** with its own devcontainer. 
 ### PR Review Flow
 
 ```bash
-# 1. Fetch and create worktree for the PR branch
+# Fetch and create worktree for the PR branch
 cd myapp
 git fetch origin
-git worktree add ../myapp-pr-123 origin/feature-branch
+git wt feature-branch    # or: git worktree add ../myapp-pr-123 origin/feature-branch
 
-# 2. Open, test, review
-code ../myapp-pr-123
+# Open, test, review
+code ../myapp-feature-branch
 # Browser: http://feature-branch.myapp.localhost
 
-# 3. Cleanup when done (see Cleanup section)
+# Cleanup when done
+git wt -d feature-branch  # or manual: on-delete.sh + git worktree remove
 ```
 
 ### Headless Usage (devcontainer CLI / AI Agents)
@@ -754,34 +897,27 @@ For git authentication in headless mode, ensure `GITHUB_TOKEN` is set in your ho
 
 ### Cleanup
 
-#### Remove a worktree
+#### Remove a worktree (git-wt)
 
 ```bash
-./worktree.sh remove ../myapp-feature-x
-# 1. Runs on-remove.sh cleanup hook (project-specific: drop DB, clear cache)
-# 2. Stops and removes the container
-# 3. Removes the worktree directory (refuses if dirty — use git worktree remove --force manually)
-# 4. Prunes any other orphaned containers
+git wt -d feature-x
+# 1. Runs on-delete.sh (stops container, project-specific cleanup, prunes orphans)
+# 2. Removes the worktree directory
+# 3. Deletes the branch
 ```
 
-#### Prune orphaned containers
+#### Remove a worktree (manual)
 
 ```bash
-./worktree.sh prune
-# Finds containers whose worktree directories no longer exist,
-# runs on-remove.sh for each, then removes them.
-```
-
-#### List worktrees
-
-```bash
-./worktree.sh list
-# Shows all worktrees with their branch and container status (running/stopped/none).
+cd ../myapp-feature-x
+.worktree/hooks/on-delete.sh
+cd ../myapp
+git worktree remove ../myapp-feature-x
 ```
 
 #### Cleanup hook
 
-Project-specific cleanup goes in `.devcontainer/hooks/on-remove.sh`. This script runs on the host before the container is removed. It receives `WORKTREE_NAME`, `PROJECT_NAME`, and `BRANCH_NAME` as environment variables.
+Project-specific cleanup goes in `.worktree/hooks/on-delete.sh`. Edit the "PROJECT-SPECIFIC CLEANUP" section. It receives project context from git and environment detection.
 
 ```bash
 # Example: Drop per-worktree PostgreSQL database
@@ -815,8 +951,7 @@ docker exec "postgres-${PROJECT_NAME}" dropdb -U dev --if-exists "${PROJECT_NAME
 
 - **Explicit adoption required.** Projects must use this template's `.devcontainer/` structure. Existing devcontainer setups need modification.
 - **Docker Compose only.** The `initializeCommand` → `.env` → compose substitution pattern requires Docker Compose as the devcontainer backend. Image-based or Dockerfile-based devcontainer configurations won't work.
-- **Main worktree must start first.** The main worktree hosts shared infrastructure. Feature worktrees depend on infra services being running. The Docker network is created by init.sh regardless, but Traefik and other infra services require the main worktree.
-- **Main worktree is special.** Deleting the main worktree's devcontainer would stop infra for all worktrees. (Mitigated by the fact that the main worktree is typically permanent.)
+- **Infrastructure must be started separately.** Run `docker compose up -d` from the project root before opening devcontainers. Infrastructure is decoupled from devcontainer lifecycle.
 - **Name collision risk.** Branch name sanitization may cause collisions (e.g., `feature/login` and `feature-login` both become `feature-login`). Use distinct branch names.
 - **GitHub Codespaces not supported.** Different constraints (no Traefik, no sibling worktrees). Out of scope.
 
